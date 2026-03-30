@@ -1,19 +1,22 @@
-<div align="center">
-
 # spectra
 
 **Runtime Behavioral Anomaly Detection for AI Agents**
 
-[![CI](https://github.com/sushaankandukoori/spectra/actions/workflows/ci.yml/badge.svg)](https://github.com/sushaankandukoori/spectra/actions/workflows/ci.yml)
+[![CI](https://github.com/sushaan-k/spectra/actions/workflows/ci.yml/badge.svg)](https://github.com/sushaan-k/spectra/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![PyPI version](https://img.shields.io/pypi/v/spectra-ai.svg)](https://pypi.org/project/spectra-ai/)
 
 *Who watches the watchers?*
 
-</div>
-
 ---
+
+## At a Glance
+
+- Behavioral profiling from historical agent traces
+- Runtime anomaly detection for tools, sequences, volume, content, and injection
+- Response policies spanning log, alert, quarantine, and block
+- Integrations for OpenTelemetry, LangGraph, MCP, Slack, webhooks, and PagerDuty
 
 ## The Problem
 

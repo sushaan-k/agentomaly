@@ -96,7 +96,9 @@ def create_app(
             try:
                 sev = Severity(severity.upper())
             except ValueError as exc:
-                raise HTTPException(status_code=400, detail="Invalid severity value") from exc
+                raise HTTPException(
+                    status_code=400, detail="Invalid severity value"
+                ) from exc
             event_log = [e for e in event_log if e.severity == sev]
         event_log = event_log[-limit:]
         return [e.model_dump(mode="json") for e in event_log]
