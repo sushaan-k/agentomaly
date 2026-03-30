@@ -1,0 +1,210 @@
+"""Main monitoring runtime.
+
+The Monitor is the central orchestrator that connects the behavioral
+profile, anomaly detectors, and response policy into a single cohesive
+runtime for real-time agent monitoring.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from spectra.detectors.base import BaseDetector
+from spectra.detectors.content_anomaly import ContentAnomalyDetector
+from spectra.detectors.injection import InjectionDetector
+from spectra.detectors.sequence_anomaly import SequenceAnomalyDetector
+from spectra.detectors.tool_anomaly import ToolAnomalyDetector
+from spectra.detectors.volume_anomaly import VolumeAnomalyDetector
+from spectra.exceptions import MonitorNotRunningError
+from spectra.models import (
+    AgentTrace,
+    AnomalyEvent,
+    ResponseAction,
+    Sensitivity,
+    Severity,
+)
+from spectra.profiler.profile import BehavioralProfile
+from spectra.response.alerter import AlertChannel, LogChannel
+from spectra.response.blocker import TaskBlocker
+from spectra.response.policy import ResponsePolicy
+
+logger = logging.getLogger(__name__)
+
+
+class Monitor:
+    """Real-time behavioral anomaly monitor for AI agents.
+
+    The Monitor is the primary user-facing class. It accepts a behavioral
+    profile, runs all configured detectors against incoming traces, and
+    executes the response policy for any detected anomalies.
+
+    Args:
+        profile: The trained behavioral profile to monitor against.
+        sensitivity: Detection sensitivity preset.
+        response_policy: Mapping of severity levels to response actions.
+            Accepts both enum types and string shorthands.
+        alert_channels: List of channels for delivering anomaly alerts.
+        blocker: Custom task blocker for block/quarantine actions.
+        detectors: Custom list of detectors. If None, all built-in
+            detectors are enabled.
+
+    Example::
+
+        from spectra import Monitor
+        from spectra.profiler import BehavioralProfile
+
+        profile = BehavioralProfile.load("profile.json")
+        monitor = Monitor(
+            profile=profile,
+            sensitivity="medium",
+            response_policy={"CRITICAL": "block", "HIGH": "alert"},
+        )
+        monitor.start()
+        events = await monitor.analyze(trace)
+    """
+
+    def __init__(
+        self,
+        profile: BehavioralProfile,
+        sensitivity: Sensitivity | str = Sensitivity.MEDIUM,
+        response_policy: dict[Severity, ResponseAction] | dict[str, str] | None = None,
+        alert_channels: list[AlertChannel] | None = None,
+        blocker: TaskBlocker | None = None,
+        detectors: list[BaseDetector] | None = None,
+    ) -> None:
+        self.profile = profile
+        self.sensitivity = (
+            Sensitivity(sensitivity) if isinstance(sensitivity, str) else sensitivity
+        )
+        self._running = False
+        self._event_log: list[AnomalyEvent] = []
+
+        if detectors is not None:
+            self._detectors = detectors
+        else:
+            self._detectors = self._default_detectors()
+
+        self._policy = ResponsePolicy(
+            policy=response_policy,
+            alert_channels=alert_channels or [LogChannel()],
+            blocker=blocker,
+        )
+
+    def _default_detectors(self) -> list[BaseDetector]:
+        """Create the default set of all built-in detectors.
+
+        Returns:
+            List of detector instances configured with the monitor's
+            sensitivity level.
+        """
+        return [
+            ToolAnomalyDetector(sensitivity=self.sensitivity),
+            SequenceAnomalyDetector(sensitivity=self.sensitivity),
+            VolumeAnomalyDetector(sensitivity=self.sensitivity),
+            ContentAnomalyDetector(sensitivity=self.sensitivity),
+            InjectionDetector(sensitivity=self.sensitivity),
+        ]
+
+    def start(self) -> None:
+        """Start the monitor.
+
+        After calling start(), the monitor is ready to analyze traces.
+        """
+        self._running = True
+        logger.info(
+            "Monitor started",
+            extra={
+                "agent_type": self.profile.agent_type,
+                "sensitivity": self.sensitivity.value,
+                "detectors": [type(d).__name__ for d in self._detectors],
+            },
+        )
+
+    def stop(self) -> None:
+        """Stop the monitor."""
+        self._running = False
+        logger.info("Monitor stopped")
+
+    @property
+    def is_running(self) -> bool:
+        """Whether the monitor is currently active."""
+        return self._running
+
+    async def analyze(self, trace: AgentTrace) -> list[AnomalyEvent]:
+        """Analyze an agent trace for behavioral anomalies.
+
+        Runs all configured detectors against the trace and executes
+        the response policy for each detected anomaly.
+
+        Args:
+            trace: The agent execution trace to analyze.
+
+        Returns:
+            List of anomaly events detected in this trace.
+
+        Raises:
+            MonitorNotRunningError: If the monitor has not been started.
+        """
+        if not self._running:
+            raise MonitorNotRunningError(
+                "Monitor must be started before analyzing traces. Call monitor.start()."
+            )
+
+        all_events: list[AnomalyEvent] = []
+
+        for detector in self._detectors:
+            try:
+                events = detector.analyze(trace, self.profile)
+                all_events.extend(events)
+            except Exception:
+                logger.exception(
+                    "Detector failed",
+                    extra={"detector": type(detector).__name__},
+                )
+
+        for event in all_events:
+            await self._policy.handle(event)
+
+        self._event_log.extend(all_events)
+
+        if all_events:
+            logger.info(
+                "Anomalies detected",
+                extra={
+                    "trace_id": trace.trace_id,
+                    "anomaly_count": len(all_events),
+                    "severities": [e.severity.value for e in all_events],
+                },
+            )
+
+        return all_events
+
+    @property
+    def event_log(self) -> list[AnomalyEvent]:
+        """All anomaly events detected since the monitor was created."""
+        return list(self._event_log)
+
+    def clear_event_log(self) -> None:
+        """Clear the anomaly event log."""
+        self._event_log.clear()
+
+    def summary(self) -> dict[str, Any]:
+        """Generate a summary of the monitor's current state.
+
+        Returns:
+            Dictionary with monitor status and anomaly statistics.
+        """
+        severity_counts: dict[str, int] = {}
+        for event in self._event_log:
+            key = event.severity.value
+            severity_counts[key] = severity_counts.get(key, 0) + 1
+
+        return {
+            "running": self._running,
+            "agent_type": self.profile.agent_type,
+            "sensitivity": self.sensitivity.value,
+            "total_anomalies": len(self._event_log),
+            "severity_counts": severity_counts,
+            "detectors": [type(d).__name__ for d in self._detectors],
+        }
