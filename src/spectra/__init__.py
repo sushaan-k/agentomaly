@@ -22,6 +22,7 @@ Quick start::
 
 from __future__ import annotations
 
+from spectra.drift import compare as compare_profiles
 from spectra.instrumentation.decorator import (
     get_current_trace,
     record_llm_call,
@@ -70,6 +71,7 @@ __all__ = [
     "TrendTracker",
     "WebhookChannel",
     "__version__",
+    "compare_profiles",
     "get_current_trace",
     "record_llm_call",
     "record_tool_call",
