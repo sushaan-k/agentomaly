@@ -7,7 +7,9 @@ runtime for real-time agent monitoring.
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 from typing import Any
 
 from spectra.detectors.base import BaseDetector
@@ -305,3 +307,34 @@ class Monitor:
             "severity_counts": severity_counts,
             "detectors": [type(d).__name__ for d in self._detectors],
         }
+
+    def to_jsonl(self, path: str | Path) -> int:
+        """Export all recorded anomaly events to a JSON Lines file.
+
+        Each line in the output file is a self-contained JSON object
+        representing one :class:`~spectra.models.AnomalyEvent`, suitable
+        for ingestion by log aggregation pipelines (e.g. Elastic, Splunk,
+        Datadog).
+
+        Args:
+            path: Destination file path.  Parent directories are created
+                automatically if they do not exist.
+
+        Returns:
+            Number of events written.
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        count = 0
+        with path.open("w", encoding="utf-8") as fh:
+            for event in self._event_log:
+                line = event.model_dump(mode="json")
+                fh.write(json.dumps(line, default=str) + "\n")
+                count += 1
+
+        logger.info(
+            "Exported anomaly events to JSONL",
+            extra={"path": str(path), "event_count": count},
+        )
+        return count
