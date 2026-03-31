@@ -55,14 +55,14 @@ class TestProfileComparison:
         random.seed(400)
         traces_b = []
         for _ in range(120):
-            pattern = random.choice([
-                ["search_kb", "search_kb", "respond"],
-                ["search_kb", "respond"],
-                ["search_kb", "create_ticket", "respond"],
-            ])
-            traces_b.append(
-                _make_trace(agent_type="test-agent", tools=pattern)
+            pattern = random.choice(
+                [
+                    ["search_kb", "search_kb", "respond"],
+                    ["search_kb", "respond"],
+                    ["search_kb", "create_ticket", "respond"],
+                ]
             )
+            traces_b.append(_make_trace(agent_type="test-agent", tools=pattern))
 
         trainer = ProfileTrainer(min_traces=100)
         profile_a = trainer.train("test-agent", traces_a)
@@ -139,9 +139,7 @@ class TestProfileComparison:
         result = compare(profile_a, profile_b)
         assert result["drift_score"] == 0.0
 
-    def test_drift_score_bounded(
-        self, trained_profile: BehavioralProfile
-    ) -> None:
+    def test_drift_score_bounded(self, trained_profile: BehavioralProfile) -> None:
         """Drift score should always be in [0, 1]."""
         empty = BehavioralProfile(agent_type="empty")
         result = compare(trained_profile, empty)

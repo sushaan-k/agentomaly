@@ -242,10 +242,7 @@ class Monitor:
             fp_count = sum(
                 1
                 for trace in traces
-                if any(
-                    d.analyze(trace, self.profile)
-                    for d in self._detectors
-                )
+                if any(d.analyze(trace, self.profile) for d in self._detectors)
             )
             fpr = fp_count / len(traces)
 

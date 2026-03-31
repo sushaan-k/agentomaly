@@ -24,9 +24,7 @@ def _empty_trace() -> AgentTrace:
 class TestEmptyToolCalls:
     """Ensure every detector handles traces with no tool calls without error."""
 
-    def test_tool_anomaly_empty_tools(
-        self, trained_profile: BehavioralProfile
-    ) -> None:
+    def test_tool_anomaly_empty_tools(self, trained_profile: BehavioralProfile) -> None:
         detector = ToolAnomalyDetector(sensitivity=Sensitivity.MEDIUM)
         events = detector.analyze(_empty_trace(), trained_profile)
         assert events == []
@@ -54,9 +52,7 @@ class TestEmptyToolCalls:
         events = detector.analyze(_empty_trace(), trained_profile)
         assert isinstance(events, list)
 
-    def test_injection_empty_tools(
-        self, trained_profile: BehavioralProfile
-    ) -> None:
+    def test_injection_empty_tools(self, trained_profile: BehavioralProfile) -> None:
         detector = InjectionDetector(sensitivity=Sensitivity.MEDIUM)
         events = detector.analyze(_empty_trace(), trained_profile)
         assert events == []
@@ -70,7 +66,5 @@ class TestEmptyToolCalls:
         # volume_stats defaults are all 0.0
         detector = VolumeAnomalyDetector(sensitivity=Sensitivity.PARANOID)
         events = detector.analyze(_empty_trace(), profile)
-        tool_events = [
-            e for e in events if "Tool call count" in e.title
-        ]
+        tool_events = [e for e in events if "Tool call count" in e.title]
         assert tool_events == []
