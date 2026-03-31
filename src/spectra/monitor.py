@@ -273,20 +273,14 @@ class Monitor:
         """Set the z-score threshold on all detectors that support it.
 
         Args:
-            z_threshold: The z-score value to apply uniformly across
-                sensitivity levels on each detector's thresholds.
+            z_threshold: The z-score value to apply to the monitor's
+                active sensitivity level on each detector's thresholds.
         """
-        from spectra.models import SensitivityThresholds
-
-        thresholds = SensitivityThresholds(
-            low=z_threshold,
-            medium=z_threshold,
-            high=z_threshold,
-            paranoid=z_threshold,
-        )
         for detector in self._detectors:
             if hasattr(detector, "thresholds"):
-                detector.thresholds = thresholds
+                updated = detector.thresholds.model_copy()
+                setattr(updated, self.sensitivity.value, z_threshold)
+                detector.thresholds = updated
 
     def summary(self) -> dict[str, Any]:
         """Generate a summary of the monitor's current state.

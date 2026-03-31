@@ -90,12 +90,22 @@ class TestAutoTune:
         self,
         trained_profile: BehavioralProfile,
     ) -> None:
-        """_apply_threshold should update all detectors with thresholds attr."""
+        """_apply_threshold should update only the active sensitivity tier."""
         monitor = Monitor(profile=trained_profile)
+        original_thresholds = []
+        for detector in monitor._detectors:
+            if hasattr(detector, "thresholds"):
+                original_thresholds.append(detector.thresholds.model_copy())
+
         monitor._apply_threshold(5.5)
 
+        original_idx = 0
         for detector in monitor._detectors:
             if hasattr(detector, "thresholds"):
                 assert isinstance(detector.thresholds, SensitivityThresholds)
-                assert detector.thresholds.low == 5.5
+                original = original_thresholds[original_idx]
+                original_idx += 1
                 assert detector.thresholds.medium == 5.5
+                assert detector.thresholds.low == original.low
+                assert detector.thresholds.high == original.high
+                assert detector.thresholds.paranoid == original.paranoid
