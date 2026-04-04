@@ -66,10 +66,10 @@ dev = [
 spectra = "spectra.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/sushaankandukoori/spectra"
-Repository = "https://github.com/sushaankandukoori/spectra"
-Issues = "https://github.com/sushaankandukoori/spectra/issues"
-Documentation = "https://github.com/sushaankandukoori/spectra#readme"
+Homepage = "https://github.com/sushaan-k/spectra"
+Repository = "https://github.com/sushaan-k/spectra"
+Issues = "https://github.com/sushaan-k/spectra/issues"
+Documentation = "https://github.com/sushaan-k/spectra#readme"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/spectra"]
