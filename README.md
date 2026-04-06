@@ -253,11 +253,21 @@ src/spectra/
         app.py               # FastAPI dashboard
 ```
 
+## Demo
+
+Run the offline walkthrough with:
+
+```bash
+uv run python examples/demo.py
+```
+
+For LangGraph, MCP, and custom-agent instrumentation flows, see `examples/`.
+
 ## Development
 
 ```bash
 # Clone and install
-git clone https://github.com/sushaankandukoori/spectra.git
+git clone https://github.com/sushaan-k/spectra.git
 cd spectra
 pip install -e ".[dev]"
 
