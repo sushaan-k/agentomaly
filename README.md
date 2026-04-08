@@ -34,6 +34,12 @@ Traditional monitoring (Datadog, New Relic, PagerDuty) tracks infrastructure met
 
 **spectra** is a lightweight observability layer that attaches to any AI agent runtime, learns normal behavioral patterns, and flags anomalies in real-time. It is security monitoring for the agent era.
 
+## Showcase
+
+![spectra anomaly demo chart](assets/anomaly-demo.png)
+
+*Detector breakdown from the offline anomaly demo: unseen tools, novel sequences, and volume spikes are surfaced independently.*
+
 ## Quick Start
 
 ### Installation
