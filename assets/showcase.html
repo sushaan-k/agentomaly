@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>spectra showcase</title>
+  <style>
+    :root {
+      --bg: #07111f;
+      --panel: rgba(15, 23, 42, 0.92);
+      --panel-2: rgba(10, 18, 32, 0.9);
+      --border: rgba(59, 130, 246, 0.12);
+      --text: #f8fafc;
+      --muted: #93a4bf;
+      --blue: #3b82f6;
+      --cyan: #38bdf8;
+      --orange: #f97316;
+      --yellow: #facc15;
+      --red: #ef4444;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(56, 189, 248, 0.12), transparent 28%),
+        radial-gradient(circle at top right, rgba(239, 68, 68, 0.12), transparent 22%),
+        linear-gradient(180deg, #08111f 0%, #040a14 100%);
+      min-height: 100vh;
+    }
+
+    .frame {
+      width: 1320px;
+      height: 860px;
+      margin: 0 auto;
+      padding: 54px 58px;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 26px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 56px;
+      line-height: 1;
+      letter-spacing: -0.04em;
+    }
+
+    .subtitle {
+      margin-top: 12px;
+      font-size: 22px;
+      line-height: 1.4;
+      color: var(--muted);
+      max-width: 960px;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 18px;
+    }
+
+    .card,
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+    }
+
+    .card {
+      padding: 18px 22px 22px;
+      min-height: 122px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto auto 0;
+      width: 100%;
+      height: 6px;
+      background: var(--accent);
+    }
+
+    .eyebrow {
+      font-size: 15px;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+
+    .value {
+      font-size: 44px;
+      font-weight: 700;
+      letter-spacing: -0.04em;
+      white-space: nowrap;
+    }
+
+    .trace-value {
+      font-size: 30px;
+      line-height: 1.1;
+      white-space: normal;
+      max-width: 100%;
+    }
+
+    .label {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    .body {
+      display: grid;
+      grid-template-columns: 1.2fr 0.95fr;
+      gap: 20px;
+      min-height: 0;
+    }
+
+    .panel {
+      padding: 28px 30px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .panel h2 {
+      margin: 0 0 6px;
+      font-size: 34px;
+      letter-spacing: -0.03em;
+    }
+
+    .panel .sub {
+      margin: 0 0 24px;
+      font-size: 17px;
+      color: var(--muted);
+    }
+
+    .bars {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+      align-items: end;
+      margin-top: 6px;
+    }
+
+    .bar-card {
+      background: var(--panel-2);
+      border: 1px solid rgba(148, 163, 184, 0.12);
+      border-radius: 20px;
+      padding: 18px 18px 20px;
+      height: 320px;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+    }
+
+    .bar-card .title {
+      align-self: flex-start;
+      font-size: 18px;
+      margin-bottom: 16px;
+      color: #dce7f6;
+    }
+
+    .bar-wrap {
+      height: 210px;
+      border-radius: 16px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+      display: flex;
+      align-items: flex-end;
+      padding: 12px;
+    }
+
+    .bar {
+      width: 100%;
+      border-radius: 12px 12px 10px 10px;
+      color: white;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding-top: 14px;
+      font-size: 38px;
+      font-weight: 700;
+    }
+
+    .incident-grid {
+      display: grid;
+      gap: 18px;
+    }
+
+    .incident-block {
+      padding: 18px 20px;
+      border-radius: 18px;
+      background: var(--panel-2);
+      border: 1px solid rgba(148, 163, 184, 0.1);
+    }
+
+    .incident-block .k {
+      font-size: 14px;
+      color: var(--muted);
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .incident-block .v {
+      font-size: 29px;
+      line-height: 1.18;
+      letter-spacing: -0.03em;
+    }
+
+    .incident-block .small {
+      font-size: 24px;
+    }
+
+    .footer {
+      margin-top: 22px;
+      font-size: 16px;
+      color: #7f90aa;
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <div>
+      <h1>spectra runtime anomaly snapshot</h1>
+      <div class="subtitle">
+        A behavioral baseline for a support agent versus one suspicious live trace. The point is not a single red flag, it is independent detector agreement across tools, sequence, and volume.
+      </div>
+    </div>
+
+    <section class="stats">
+      <div class="card" style="--accent: var(--cyan);">
+        <div class="eyebrow">Profile</div>
+        <div class="value">2 tools</div>
+        <div class="label">known safe actions in baseline traces</div>
+      </div>
+      <div class="card" style="--accent: var(--orange);">
+        <div class="eyebrow">Critical</div>
+        <div class="value">4 events</div>
+        <div class="label">never-seen tools and extreme token spike</div>
+      </div>
+      <div class="card" style="--accent: var(--yellow);">
+        <div class="eyebrow">High</div>
+        <div class="value">2 events</div>
+        <div class="label">sequence anomalies from improbable transitions</div>
+      </div>
+      <div class="card" style="--accent: var(--red);">
+        <div class="eyebrow">Live trace</div>
+        <div class="value trace-value">shell_exec → export_data</div>
+        <div class="label">observed tool path in the suspicious execution</div>
+      </div>
+    </section>
+
+    <section class="body">
+      <div class="panel">
+        <div>
+          <h2>Detector agreement</h2>
+          <p class="sub">Each detector family trips on the same trace for a different reason. That is exactly what you want in runtime monitoring.</p>
+        </div>
+        <div class="bars">
+          <div class="bar-card">
+            <div class="title">tool usage</div>
+            <div class="bar-wrap">
+              <div class="bar" style="height: 86%; background: linear-gradient(180deg, #fb7185 0%, #ef4444 100%);">2</div>
+            </div>
+          </div>
+          <div class="bar-card">
+            <div class="title">sequence</div>
+            <div class="bar-wrap">
+              <div class="bar" style="height: 86%; background: linear-gradient(180deg, #60a5fa 0%, #2563eb 100%);">2</div>
+            </div>
+          </div>
+          <div class="bar-card">
+            <div class="title">volume</div>
+            <div class="bar-wrap">
+              <div class="bar" style="height: 86%; background: linear-gradient(180deg, #fb923c 0%, #f97316 100%);">2</div>
+            </div>
+          </div>
+        </div>
+        <div class="footer">Baseline tools: <span style="color:#dce7f6">search_kb</span>, <span style="color:#dce7f6">respond</span></div>
+      </div>
+
+      <div class="panel">
+        <div>
+          <h2>Incident detail</h2>
+          <p class="sub">The showcase trace is bad because it departs from the profile on multiple dimensions at once.</p>
+        </div>
+        <div class="incident-grid">
+          <div class="incident-block">
+            <div class="k">Observed tools</div>
+            <div class="v small">shell_exec, export_data, respond</div>
+          </div>
+          <div class="incident-block">
+            <div class="k">Expected tools</div>
+            <div class="v small" style="color: var(--cyan);">search_kb, respond</div>
+          </div>
+          <div class="incident-block">
+            <div class="k">Token spike</div>
+            <div class="v">5,400 live tokens vs 920 baseline</div>
+          </div>
+          <div class="incident-block">
+            <div class="k">Policy outcome</div>
+            <div class="v small" style="color: var(--orange);">Alerted immediately, ready for quarantine or block</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>
