@@ -28,6 +28,7 @@ from spectra.profiler.profile import BehavioralProfile
 from spectra.response.alerter import AlertChannel, LogChannel
 from spectra.response.blocker import TaskBlocker
 from spectra.response.policy import ResponsePolicy
+from spectra.trend import Trend, TrendTracker
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,7 @@ class Monitor:
         )
         self._running = False
         self._event_log: list[AnomalyEvent] = []
+        self._trend_tracker = TrendTracker()
 
         if detectors is not None:
             self._detectors = detectors
@@ -167,6 +169,7 @@ class Monitor:
             await self._policy.handle(event)
 
         self._event_log.extend(all_events)
+        self._trend_tracker.record_many(all_events)
 
         if all_events:
             logger.info(
@@ -188,6 +191,17 @@ class Monitor:
     def clear_event_log(self) -> None:
         """Clear the anomaly event log."""
         self._event_log.clear()
+
+    def get_trend(self) -> Trend:
+        """Return the current anomaly severity trend.
+
+        Analyzes the rolling window of recent anomaly events to determine
+        whether severity is escalating, stable, or de-escalating.
+
+        Returns:
+            The current :class:`~spectra.trend.Trend` direction.
+        """
+        return self._trend_tracker.get_trend()
 
     def summary(self) -> dict[str, Any]:
         """Generate a summary of the monitor's current state.

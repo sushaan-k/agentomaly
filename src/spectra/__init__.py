@@ -47,6 +47,7 @@ from spectra.response.alerter import (
     SlackWebhook,
     WebhookChannel,
 )
+from spectra.trend import Trend, TrendTracker
 
 __version__ = "0.1.0"
 
@@ -65,6 +66,8 @@ __all__ = [
     "Severity",
     "SlackWebhook",
     "ToolCall",
+    "Trend",
+    "TrendTracker",
     "WebhookChannel",
     "__version__",
     "get_current_trace",
