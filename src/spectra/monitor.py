@@ -203,6 +203,89 @@ class Monitor:
         """
         return self._trend_tracker.get_trend()
 
+    def auto_tune(
+        self,
+        traces: list[AgentTrace],
+        target_false_positive_rate: float = 0.05,
+    ) -> dict[str, float]:
+        """Automatically adjust detector z-score thresholds.
+
+        Analyzes a set of known-good traces and calibrates the z-score
+        threshold so that the proportion of traces that produce anomaly
+        events (false positives) is at or below the target rate.
+
+        The method performs a binary search over z-score values, applying
+        each candidate threshold to detectors that support the
+        ``thresholds`` attribute, and returns the chosen threshold.
+
+        Args:
+            traces: Collection of traces assumed to be normal behavior.
+            target_false_positive_rate: Desired maximum fraction of normal
+                traces that should trigger anomalies (default 0.05 = 5%).
+
+        Returns:
+            Dictionary with ``"z_threshold"`` (the selected value) and
+            ``"achieved_fpr"`` (the measured false positive rate).
+        """
+        if not traces:
+            return {"z_threshold": 3.0, "achieved_fpr": 0.0}
+
+        lo, hi = 1.0, 8.0
+        best_threshold = hi
+        best_fpr = 0.0
+
+        for _ in range(20):
+            mid = (lo + hi) / 2.0
+            self._apply_threshold(mid)
+            fp_count = sum(
+                1
+                for trace in traces
+                if any(
+                    d.analyze(trace, self.profile)
+                    for d in self._detectors
+                )
+            )
+            fpr = fp_count / len(traces)
+
+            if fpr <= target_false_positive_rate:
+                best_threshold = mid
+                best_fpr = fpr
+                hi = mid
+            else:
+                lo = mid
+
+        self._apply_threshold(best_threshold)
+
+        logger.info(
+            "Auto-tune complete",
+            extra={
+                "z_threshold": best_threshold,
+                "achieved_fpr": best_fpr,
+                "target_fpr": target_false_positive_rate,
+                "num_traces": len(traces),
+            },
+        )
+        return {"z_threshold": best_threshold, "achieved_fpr": best_fpr}
+
+    def _apply_threshold(self, z_threshold: float) -> None:
+        """Set the z-score threshold on all detectors that support it.
+
+        Args:
+            z_threshold: The z-score value to apply uniformly across
+                sensitivity levels on each detector's thresholds.
+        """
+        from spectra.models import SensitivityThresholds
+
+        thresholds = SensitivityThresholds(
+            low=z_threshold,
+            medium=z_threshold,
+            high=z_threshold,
+            paranoid=z_threshold,
+        )
+        for detector in self._detectors:
+            if hasattr(detector, "thresholds"):
+                detector.thresholds = thresholds
+
     def summary(self) -> dict[str, Any]:
         """Generate a summary of the monitor's current state.
 
