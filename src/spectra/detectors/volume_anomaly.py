@@ -62,6 +62,13 @@ class VolumeAnomalyDetector(BaseDetector):
         threshold = self.thresholds.get_threshold(self.sensitivity)
         vs = profile.volume_stats
 
+        tool_count = float(len(trace.tool_calls))
+        # Skip the tool-call-count check when both the trace and the
+        # profile have zero tool calls -- there is no deviation to report.
+        include_tool_count = not (
+            tool_count == 0.0 and vs.tool_calls_mean == 0.0 and vs.tool_calls_std == 0.0
+        )
+
         checks: list[tuple[str, float, float, float, str]] = [
             (
                 "LLM call count",
@@ -70,28 +77,35 @@ class VolumeAnomalyDetector(BaseDetector):
                 vs.llm_calls_std,
                 "llm_calls",
             ),
-            (
-                "Tool call count",
-                float(len(trace.tool_calls)),
-                vs.tool_calls_mean,
-                vs.tool_calls_std,
-                "tool_calls",
-            ),
-            (
-                "Total tokens",
-                float(trace.total_tokens),
-                vs.total_tokens_mean,
-                vs.total_tokens_std,
-                "total_tokens",
-            ),
-            (
-                "Duration",
-                trace.duration_ms,
-                vs.duration_ms_mean,
-                vs.duration_ms_std,
-                "duration_ms",
-            ),
         ]
+        if include_tool_count:
+            checks.append(
+                (
+                    "Tool call count",
+                    tool_count,
+                    vs.tool_calls_mean,
+                    vs.tool_calls_std,
+                    "tool_calls",
+                ),
+            )
+        checks.extend(
+            [
+                (
+                    "Total tokens",
+                    float(trace.total_tokens),
+                    vs.total_tokens_mean,
+                    vs.total_tokens_std,
+                    "total_tokens",
+                ),
+                (
+                    "Duration",
+                    trace.duration_ms,
+                    vs.duration_ms_mean,
+                    vs.duration_ms_std,
+                    "duration_ms",
+                ),
+            ]
+        )
 
         for label, actual, mean, std, metric_key in checks:
             z = self._z_score(actual, mean, std)
