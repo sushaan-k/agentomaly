@@ -62,6 +62,8 @@ class ToolAnomalyDetector(BaseDetector):
             List of anomaly events for any detected tool usage anomalies.
         """
         events: list[AnomalyEvent] = []
+        if not trace.tool_calls:
+            return events
         events.extend(self._check_novel_tools(trace, profile))
         events.extend(self._check_frequency_anomalies(trace, profile))
         events.extend(self._check_argument_anomalies(trace, profile))

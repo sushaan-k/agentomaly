@@ -63,6 +63,8 @@ class InjectionDetector(BaseDetector):
             List of anomaly events if injection is suspected.
         """
         events: list[AnomalyEvent] = []
+        if not trace.tool_calls:
+            return events
         events.extend(self._check_behavioral_shift(trace, profile))
         events.extend(self._check_post_tool_novel_actions(trace, profile))
         return events
