@@ -66,9 +66,7 @@ class VolumeAnomalyDetector(BaseDetector):
         # Skip the tool-call-count check when both the trace and the
         # profile have zero tool calls -- there is no deviation to report.
         include_tool_count = not (
-            tool_count == 0.0
-            and vs.tool_calls_mean == 0.0
-            and vs.tool_calls_std == 0.0
+            tool_count == 0.0 and vs.tool_calls_mean == 0.0 and vs.tool_calls_std == 0.0
         )
 
         checks: list[tuple[str, float, float, float, str]] = [
@@ -90,22 +88,24 @@ class VolumeAnomalyDetector(BaseDetector):
                     "tool_calls",
                 ),
             )
-        checks.extend([
-            (
-                "Total tokens",
-                float(trace.total_tokens),
-                vs.total_tokens_mean,
-                vs.total_tokens_std,
-                "total_tokens",
-            ),
-            (
-                "Duration",
-                trace.duration_ms,
-                vs.duration_ms_mean,
-                vs.duration_ms_std,
-                "duration_ms",
-            ),
-        ])
+        checks.extend(
+            [
+                (
+                    "Total tokens",
+                    float(trace.total_tokens),
+                    vs.total_tokens_mean,
+                    vs.total_tokens_std,
+                    "total_tokens",
+                ),
+                (
+                    "Duration",
+                    trace.duration_ms,
+                    vs.duration_ms_mean,
+                    vs.duration_ms_std,
+                    "duration_ms",
+                ),
+            ]
+        )
 
         for label, actual, mean, std, metric_key in checks:
             z = self._z_score(actual, mean, std)
