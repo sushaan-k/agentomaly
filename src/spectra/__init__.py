@@ -22,7 +22,6 @@ Quick start::
 
 from __future__ import annotations
 
-from spectra.drift import compare as compare_profiles
 from spectra.instrumentation.decorator import (
     get_current_trace,
     record_llm_call,
@@ -48,7 +47,6 @@ from spectra.response.alerter import (
     SlackWebhook,
     WebhookChannel,
 )
-from spectra.trend import Trend, TrendTracker
 
 __version__ = "0.1.0"
 
@@ -67,11 +65,8 @@ __all__ = [
     "Severity",
     "SlackWebhook",
     "ToolCall",
-    "Trend",
-    "TrendTracker",
     "WebhookChannel",
     "__version__",
-    "compare_profiles",
     "get_current_trace",
     "record_llm_call",
     "record_tool_call",
