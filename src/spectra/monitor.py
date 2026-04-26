@@ -7,7 +7,9 @@ runtime for real-time agent monitoring.
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 from typing import Any
 
 from spectra.detectors.base import BaseDetector
@@ -28,6 +30,7 @@ from spectra.profiler.profile import BehavioralProfile
 from spectra.response.alerter import AlertChannel, LogChannel
 from spectra.response.blocker import TaskBlocker
 from spectra.response.policy import ResponsePolicy
+from spectra.trend import Trend, TrendTracker
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +82,7 @@ class Monitor:
         )
         self._running = False
         self._event_log: list[AnomalyEvent] = []
+        self._trend_tracker = TrendTracker()
 
         if detectors is not None:
             self._detectors = detectors
@@ -167,6 +171,7 @@ class Monitor:
             await self._policy.handle(event)
 
         self._event_log.extend(all_events)
+        self._trend_tracker.record_many(all_events)
 
         if all_events:
             logger.info(
@@ -189,6 +194,91 @@ class Monitor:
         """Clear the anomaly event log."""
         self._event_log.clear()
 
+    def get_trend(self) -> Trend:
+        """Return the current anomaly severity trend.
+
+        Analyzes the rolling window of recent anomaly events to determine
+        whether severity is escalating, stable, or de-escalating.
+
+        Returns:
+            The current :class:`~spectra.trend.Trend` direction.
+        """
+        return self._trend_tracker.get_trend()
+
+    def auto_tune(
+        self,
+        traces: list[AgentTrace],
+        target_false_positive_rate: float = 0.05,
+    ) -> dict[str, float]:
+        """Automatically adjust detector z-score thresholds.
+
+        Analyzes a set of known-good traces and calibrates the z-score
+        threshold so that the proportion of traces that produce anomaly
+        events (false positives) is at or below the target rate.
+
+        The method performs a binary search over z-score values, applying
+        each candidate threshold to detectors that support the
+        ``thresholds`` attribute, and returns the chosen threshold.
+
+        Args:
+            traces: Collection of traces assumed to be normal behavior.
+            target_false_positive_rate: Desired maximum fraction of normal
+                traces that should trigger anomalies (default 0.05 = 5%).
+
+        Returns:
+            Dictionary with ``"z_threshold"`` (the selected value) and
+            ``"achieved_fpr"`` (the measured false positive rate).
+        """
+        if not traces:
+            return {"z_threshold": 3.0, "achieved_fpr": 0.0}
+
+        lo, hi = 1.0, 8.0
+        best_threshold = hi
+        best_fpr = 0.0
+
+        for _ in range(20):
+            mid = (lo + hi) / 2.0
+            self._apply_threshold(mid)
+            fp_count = sum(
+                1
+                for trace in traces
+                if any(d.analyze(trace, self.profile) for d in self._detectors)
+            )
+            fpr = fp_count / len(traces)
+
+            if fpr <= target_false_positive_rate:
+                best_threshold = mid
+                best_fpr = fpr
+                hi = mid
+            else:
+                lo = mid
+
+        self._apply_threshold(best_threshold)
+
+        logger.info(
+            "Auto-tune complete",
+            extra={
+                "z_threshold": best_threshold,
+                "achieved_fpr": best_fpr,
+                "target_fpr": target_false_positive_rate,
+                "num_traces": len(traces),
+            },
+        )
+        return {"z_threshold": best_threshold, "achieved_fpr": best_fpr}
+
+    def _apply_threshold(self, z_threshold: float) -> None:
+        """Set the z-score threshold on all detectors that support it.
+
+        Args:
+            z_threshold: The z-score value to apply to the monitor's
+                active sensitivity level on each detector's thresholds.
+        """
+        for detector in self._detectors:
+            if hasattr(detector, "thresholds"):
+                updated = detector.thresholds.model_copy()
+                setattr(updated, self.sensitivity.value, z_threshold)
+                detector.thresholds = updated
+
     def summary(self) -> dict[str, Any]:
         """Generate a summary of the monitor's current state.
 
@@ -208,3 +298,34 @@ class Monitor:
             "severity_counts": severity_counts,
             "detectors": [type(d).__name__ for d in self._detectors],
         }
+
+    def to_jsonl(self, path: str | Path) -> int:
+        """Export all recorded anomaly events to a JSON Lines file.
+
+        Each line in the output file is a self-contained JSON object
+        representing one :class:`~spectra.models.AnomalyEvent`, suitable
+        for ingestion by log aggregation pipelines (e.g. Elastic, Splunk,
+        Datadog).
+
+        Args:
+            path: Destination file path.  Parent directories are created
+                automatically if they do not exist.
+
+        Returns:
+            Number of events written.
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        count = 0
+        with path.open("w", encoding="utf-8") as fh:
+            for event in self._event_log:
+                line = event.model_dump(mode="json")
+                fh.write(json.dumps(line, default=str) + "\n")
+                count += 1
+
+        logger.info(
+            "Exported anomaly events to JSONL",
+            extra={"path": str(path), "event_count": count},
+        )
+        return count

@@ -1,13 +1,11 @@
-# agentomaly
+# spectra
 
-**Runtime Behavioral Anomaly Detection for AI Agents via OpenTelemetry**
+**Runtime Behavioral Anomaly Detection for AI Agents**
 
-[![CI](https://github.com/sushaan-k/agentomaly/actions/workflows/ci.yml/badge.svg)](https://github.com/sushaan-k/agentomaly/actions)
-[![PyPI](https://img.shields.io/pypi/v/agentomaly.svg)](https://pypi.org/project/agentomaly/)
-[![PyPI Downloads](https://img.shields.io/pypi/dm/agentomaly.svg)](https://pypi.org/project/agentomaly/)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-compatible-blueviolet.svg)](https://opentelemetry.io)
+[![CI](https://github.com/sushaan-k/spectra/actions/workflows/ci.yml/badge.svg)](https://github.com/sushaan-k/spectra/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![PyPI version](https://img.shields.io/pypi/v/spectra-ai.svg)](https://pypi.org/project/spectra-ai/)
 
 *Who watches the watchers?*
 
@@ -15,34 +13,39 @@
 
 ## At a Glance
 
-- **Behavioral profiling** from historical agent traces
-- **Runtime anomaly detection** for tools, sequences, volume, content, and injection
-- **Response policies** spanning log, alert, quarantine, and block
-- **OpenTelemetry integration** with out-of-the-box backend support (Jaeger, Honeycomb, Datadog, Grafana, AWS X-Ray)
-- **LangGraph, MCP, Slack, webhooks, and PagerDuty** integrations
+- Behavioral profiling from historical agent traces
+- Runtime anomaly detection for tools, sequences, volume, content, and injection
+- Response policies spanning log, alert, quarantine, and block
+- Integrations for OpenTelemetry, LangGraph, MCP, Slack, webhooks, and PagerDuty
 
 ## The Problem
 
 AI agents are being deployed into production at an accelerating rate. But there is a critical blind spot: **nobody is monitoring what these agents actually do**.
 
-Traditional monitoring (Datadog, New Relic, PagerDuty) tracks infrastructure metrics — CPU, memory, latency, error rates. An agent can be running perfectly fine on those metrics while doing something catastrophically wrong:
+Traditional monitoring (Datadog, New Relic, PagerDuty) tracks infrastructure metrics -- CPU, memory, latency, error rates. An agent can be running perfectly fine on those metrics while doing something catastrophically wrong:
 
 - Making **unusual tool calls** it has never made before
 - Accessing **data it shouldn't need** for the current task
 - Taking **50 actions** when similar tasks usually take 10
 - Producing **structurally different outputs** from its historical norm
-- Being manipulated by **indirect prompt injection** — invisible to infra monitoring
+- Being manipulated by **indirect prompt injection** -- invisible to infra monitoring
 
 ## The Solution
 
-**agentomaly** is a lightweight observability layer that attaches to any AI agent runtime, learns normal behavioral patterns from historical execution traces, and flags anomalies in real-time with statistical rigor. It is security monitoring for the agent era.
+**spectra** is a lightweight observability layer that attaches to any AI agent runtime, learns normal behavioral patterns, and flags anomalies in real-time. It is security monitoring for the agent era.
+
+## Showcase
+
+![spectra anomaly demo chart](assets/anomaly-demo.png)
+
+*Detector breakdown from the offline anomaly demo: unseen tools, novel sequences, and volume spikes are surfaced independently.*
 
 ## Quick Start
 
 ### Installation
 
 ```bash
-pip install agentomaly
+pip install spectra-ai
 ```
 
 ### Train a Behavioral Profile
@@ -93,7 +96,7 @@ import spectra
 
 @spectra.trace(agent_type="customer-support")
 async def handle_request(user_message: str) -> str:
-    # Your agent code — spectra captures tool calls and LLM usage
+    # Your agent code -- spectra captures tool calls and LLM usage
     spectra.record_tool_call(tool_name="search_kb", arguments={"q": user_message})
     spectra.record_llm_call(model="gpt-4", total_tokens=1500)
     return "Response"
@@ -114,107 +117,70 @@ graph TD
     E -->|block| I[Task Terminated]
 
     subgraph Detectors
-        D1[Tool Sequence]
-        D2[Cost Spike]
-        D3[Latency Regression]
-        D4[Output Distribution]
-        D5[Retry Storm]
-        D6[Hallucination Rate]
+        D1[Tool Anomaly]
+        D2[Sequence Anomaly]
+        D3[Volume Anomaly]
+        D4[Content Anomaly]
+        D5[Injection Detection]
     end
 
-    D --- D1 & D2 & D3 & D4 & D5 & D6
+    D --- D1 & D2 & D3 & D4 & D5
 ```
 
 ## Anomaly Detectors
 
-| Detector | Metric | Method | Tuning Knob |
-|---|---|---|---|
-| **Tool Sequence** | Call order distribution | Jensen–Shannon divergence | JS threshold 0.0–1.0 |
-| **Cost Spike** | Token spend per run | Rolling z-score | σ threshold |
-| **Latency Regression** | P50/P95/P99 step latency | Welch's t-test | p-value + effect size |
-| **Output Distribution** | Response length + vocabulary | KL divergence | KL threshold |
-| **Retry Storm** | Retry rate per tool | Control chart (Shewhart) | 3σ default |
-| **Hallucination Rate** | Postcondition failures | Bernoulli CUSUM | Max run length |
+### 1. Tool Usage Anomaly
+Flags when an agent calls tools outside its normal repertoire.
+- **Never-seen tools**: tool not observed in any training trace (CRITICAL)
+- **Frequency anomaly**: tool called far more/less than normal
+- **Argument anomaly**: unusual argument patterns
 
-### Detector Descriptions
+### 2. Action Sequence Anomaly
+Builds a Markov model of normal action sequences and flags deviations.
+- **Novel transitions**: action sequence never seen in training
+- **Low-probability sequences**: statistically improbable chains
+- **Loop detection**: agent stuck repeating the same action
 
-**Tool Sequence Anomaly**
-- Builds a Markov model of normal action sequences and flags deviations
-- Novel transitions, low-probability sequences, and loop detection
-- **Cost**: O(n) per trace | **Latency**: <5ms | **Output**: sequence likelihood score
+### 3. Volume / Duration Anomaly
+Z-score statistical analysis on execution metrics.
+- LLM call count, tool call count, total tokens, wall-clock duration
+- Configurable sensitivity: `low`, `medium`, `high`, `paranoid`
 
-**Cost Spike Detection**
-- Z-score statistical analysis on token spend and LLM call counts
-- Detects spend outliers across runs and correlates with tool usage
-- **Cost**: O(1) per trace | **Latency**: <1ms | **Output**: cost anomaly z-score
+### 4. Content Anomaly
+Detects structural changes in agent output.
+- Unexpected code blocks, URLs, or structured data
+- Dramatic output length changes
 
-**Latency Regression**
-- Welch's t-test on percentile latencies (P50, P95, P99) vs. baseline
-- Flags when individual step latencies exceed control limits
-- **Cost**: O(n) | **Latency**: <3ms | **Output**: p-value + effect size
-
-**Output Distribution Anomaly**
-- KL divergence on response length and vocabulary distributions
-- Detects structural changes in agent outputs (unexpected code blocks, URLs)
-- **Cost**: O(n) | **Latency**: <5ms | **Output**: KL divergence score
-
-**Retry Storm Detection**
-- Shewhart control chart on per-tool retry rates
-- Flags when retries exceed 3σ above baseline
-- **Cost**: O(1) | **Latency**: <1ms | **Output**: retry rate anomaly flag + count
-
-**Hallucination Rate Detection**
-- Bernoulli CUSUM on postcondition failure rates
-- Detects when agents start failing structural assertions or business logic checks
-- **Cost**: O(n) | **Latency**: <2ms | **Output**: failure rate + CUSUM signal
-
-## OpenTelemetry Backend Support
-
-| Backend | Traces | Metrics | Logs |
-|---|---|---|---|
-| **Jaeger** | ✅ | — | — |
-| **Honeycomb** | ✅ | ✅ | ✅ |
-| **Datadog** | ✅ | ✅ | ✅ |
-| **Grafana Tempo** | ✅ | ✅ | ✅ |
-| **AWS X-Ray** | ✅ | — | — |
-| **OTLP (generic)** | ✅ | ✅ | ✅ |
+### 5. Prompt Injection Detection
+Behavioral analysis for indirect prompt injection.
+- Detects behavioral shifts after external content ingestion
+- Flags the *effect* of injection, not just the input
+- Correlates novel tool usage with preceding tool results
 
 ## Sensitivity Levels
 
 | Level | Z-Score Threshold | Use Case |
 |-------|-------------------|----------|
-| `low` | 4.0 | Production — minimize false positives |
+| `low` | 4.0 | Production -- minimize false positives |
 | `medium` | 3.0 | Balanced monitoring (default) |
 | `high` | 2.0 | Elevated security posture |
-| `paranoid` | 1.5 | Maximum detection — expect more alerts |
+| `paranoid` | 1.5 | Maximum detection -- expect more alerts |
 
-## Alerting & Integration
-
-### Slack
+## Alerting
 
 ```python
-from spectra import Monitor, SlackWebhook
+from spectra import Monitor, SlackWebhook, WebhookChannel
 
 monitor = Monitor(
     profile=profile,
     alert_channels=[
         SlackWebhook("https://hooks.slack.com/services/..."),
-    ],
-)
-```
-
-### Webhooks
-
-```python
-from spectra import Monitor, WebhookChannel
-
-monitor = Monitor(
-    profile=profile,
-    alert_channels=[
         WebhookChannel("https://your-api.com/alerts"),
     ],
 )
 ```
+
+## Integrations
 
 ### OpenTelemetry
 
@@ -280,12 +246,11 @@ src/spectra/
         trainer.py           # Profile training
         markov.py            # Markov chain model
     detectors/
-        tool_anomaly.py      # Tool sequence detector
-        cost_spike.py        # Cost spike detector
-        latency_regression.py # Latency regression detector
-        content_anomaly.py   # Output distribution detector
-        retry_storm.py       # Retry storm detector
-        hallucination.py     # Hallucination rate detector
+        tool_anomaly.py      # Tool usage detector
+        sequence_anomaly.py  # Action sequence detector
+        volume_anomaly.py    # Volume/duration detector
+        content_anomaly.py   # Content analysis detector
+        injection.py         # Prompt injection detector
     response/
         policy.py            # Response policy engine
         alerter.py           # Alert channels
@@ -308,8 +273,8 @@ For LangGraph, MCP, and custom-agent instrumentation flows, see `examples/`.
 
 ```bash
 # Clone and install
-git clone https://github.com/sushaan-k/agentomaly.git
-cd agentomaly
+git clone https://github.com/sushaan-k/spectra.git
+cd spectra
 pip install -e ".[dev]"
 
 # Run tests
@@ -323,14 +288,13 @@ ruff format src/ tests/
 mypy src/spectra/
 ```
 
-## Why agentomaly?
+## Why spectra?
 
-1. **New category** — behavioral monitoring for AI agents does not exist as a product
-2. **Learns, not rules** — adapts to each agent type from real execution data
-3. **Detects injection by effect** — catches prompt injection via behavioral shift, not input scanning
-4. **Security + observability** — bridges the gap between security monitoring and agent ops
-5. **Production integrations** — OpenTelemetry, Slack, LangGraph, MCP out of the box
-6. **Statistically rigorous** — uses Jensen–Shannon divergence, Welch's t-test, KL divergence, and Shewhart charts
+1. **New category** -- behavioral monitoring for AI agents does not exist as a product
+2. **Learns, not rules** -- adapts to each agent type from real execution data
+3. **Detects injection by effect** -- catches prompt injection via behavioral shift, not input scanning
+4. **Security + observability** -- bridges the gap between security monitoring and agent ops
+5. **Production integrations** -- OpenTelemetry, Slack, LangGraph, MCP out of the box
 
 ## Contributing
 
