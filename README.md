@@ -257,9 +257,22 @@ spectra train traces.json --agent-type customer-support --output profile.json
 # Inspect a profile
 spectra inspect profile.json
 
+# Analyze one trace, or a JSON array of traces, against a trained profile
+spectra analyze profile.json traces.json --fail-on HIGH
+
+# Emit machine-readable reports for CI or incident review
+spectra analyze profile.json traces.json --format json --output report.json
+spectra analyze profile.json traces.json --format jsonl --output events.jsonl
+
 # Launch the dashboard
 spectra dashboard profile.json --port 8400
 ```
+
+`spectra analyze` runs offline with a non-blocking response policy, so
+quarantine and block actions are recorded as log actions instead of pausing
+CI. By default it rejects traces whose `agent_type` does not match the
+profile; use `--allow-agent-type-mismatch` only for deliberate cross-profile
+experiments.
 
 ## Project Structure
 

@@ -50,6 +50,59 @@ def _make_training_traces_json(count: int = 120) -> list[dict]:
     return traces
 
 
+def _make_anomalous_trace_json(agent_type: str = "test-agent") -> dict:
+    """Build a serializable trace that should trigger critical anomalies."""
+    started = datetime.now(UTC)
+    trace = AgentTrace(
+        agent_type=agent_type,
+        task_id="suspicious-task",
+        started_at=started,
+        ended_at=started + timedelta(minutes=30),
+        tool_calls=[
+            ToolCall(
+                tool_name="database_query",
+                arguments={"sql": "select * from users"},
+                timestamp=started,
+            ),
+            ToolCall(
+                tool_name="delete_record",
+                arguments={"table": "users"},
+                timestamp=started + timedelta(seconds=5),
+            ),
+        ],
+        llm_calls=[
+            LLMCall(
+                model="gpt-4",
+                total_tokens=50000,
+                timestamp=started + timedelta(seconds=1),
+            )
+        ],
+        output="```sql\nselect * from users;\n```",
+    )
+    return trace.model_dump(mode="json")
+
+
+def _write_profile(runner: CliRunner, tmpdir: str) -> Path:
+    """Train a profile through the CLI and return its path."""
+    traces_path = Path(tmpdir) / "training-traces.json"
+    traces_path.write_text(json.dumps(_make_training_traces_json(120)))
+    profile_path = Path(tmpdir) / "profile.json"
+
+    result = runner.invoke(
+        main,
+        [
+            "train",
+            str(traces_path),
+            "--agent-type",
+            "test-agent",
+            "--output",
+            str(profile_path),
+        ],
+    )
+    assert result.exit_code == 0
+    return profile_path
+
+
 class TestTrainCommand:
     def test_train_success(self) -> None:
         runner = CliRunner()
@@ -208,6 +261,120 @@ class TestInspectCommand:
         runner = CliRunner()
         result = runner.invoke(main, ["inspect", "/nonexistent/profile.json"])
         assert result.exit_code != 0
+
+
+class TestAnalyzeCommand:
+    def test_analyze_summary_passes_without_gate(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            profile_path = _write_profile(runner, tmpdir)
+            trace_path = Path(tmpdir) / "trace.json"
+            trace_path.write_text(json.dumps(_make_anomalous_trace_json()))
+
+            result = runner.invoke(
+                main, ["analyze", str(profile_path), str(trace_path)]
+            )
+
+            assert result.exit_code == 0
+            assert "Profile: test-agent" in result.output
+            assert "Anomaly events:" in result.output
+            assert "[CRITICAL] Never-seen tool: database_query" in result.output
+
+    def test_analyze_json_reports_ci_failure(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            profile_path = _write_profile(runner, tmpdir)
+            trace_path = Path(tmpdir) / "traces.json"
+            trace_path.write_text(json.dumps([_make_anomalous_trace_json()]))
+
+            result = runner.invoke(
+                main,
+                [
+                    "analyze",
+                    str(profile_path),
+                    str(trace_path),
+                    "--format",
+                    "json",
+                    "--fail-on",
+                    "HIGH",
+                ],
+            )
+
+            assert result.exit_code == 2
+            payload = json.loads(result.output.split("Failure threshold met:")[0])
+            assert payload["failed"] is True
+            assert payload["fail_on"] == "HIGH"
+            assert payload["max_severity"] == "CRITICAL"
+            assert payload["trace_count"] == 1
+            assert payload["event_count"] > 0
+
+    def test_analyze_jsonl_output_file_contains_events(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            profile_path = _write_profile(runner, tmpdir)
+            trace_path = Path(tmpdir) / "trace.json"
+            output_path = Path(tmpdir) / "events.jsonl"
+            trace_path.write_text(json.dumps(_make_anomalous_trace_json()))
+
+            result = runner.invoke(
+                main,
+                [
+                    "analyze",
+                    str(profile_path),
+                    str(trace_path),
+                    "--format",
+                    "jsonl",
+                    "--output",
+                    str(output_path),
+                ],
+            )
+
+            assert result.exit_code == 0
+            assert result.output == ""
+            lines = output_path.read_text().splitlines()
+            assert lines
+            events = [json.loads(line) for line in lines]
+            assert any(event["severity"] == "CRITICAL" for event in events)
+            assert all(event["action_taken"] == "log" for event in events)
+
+    def test_analyze_rejects_agent_type_mismatch_by_default(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            profile_path = _write_profile(runner, tmpdir)
+            trace_path = Path(tmpdir) / "trace.json"
+            trace_path.write_text(json.dumps(_make_anomalous_trace_json("other-agent")))
+
+            result = runner.invoke(
+                main, ["analyze", str(profile_path), str(trace_path)]
+            )
+
+            assert result.exit_code != 0
+            assert "agent_type does not match profile" in result.output
+
+    def test_analyze_allows_agent_type_mismatch_when_requested(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            profile_path = _write_profile(runner, tmpdir)
+            trace_path = Path(tmpdir) / "trace.json"
+            trace_path.write_text(json.dumps(_make_anomalous_trace_json("other-agent")))
+
+            result = runner.invoke(
+                main,
+                [
+                    "analyze",
+                    str(profile_path),
+                    str(trace_path),
+                    "--allow-agent-type-mismatch",
+                ],
+            )
+
+            assert result.exit_code == 0
+            assert "Anomaly events:" in result.output
 
 
 class TestDashboardCommand:
