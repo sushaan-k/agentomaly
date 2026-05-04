@@ -264,6 +264,13 @@ spectra analyze profile.json traces.json --fail-on HIGH
 spectra analyze profile.json traces.json --format json --output report.json
 spectra analyze profile.json traces.json --format jsonl --output events.jsonl
 
+# Capture and enforce a known-anomaly baseline
+spectra analyze profile.json traces.json --write-baseline anomaly-baseline.json
+spectra analyze profile.json traces.json \
+  --baseline anomaly-baseline.json \
+  --only-new \
+  --fail-on-new
+
 # Launch the dashboard
 spectra dashboard profile.json --port 8400
 ```
@@ -273,6 +280,13 @@ quarantine and block actions are recorded as log actions instead of pausing
 CI. By default it rejects traces whose `agent_type` does not match the
 profile; use `--allow-agent-type-mismatch` only for deliberate cross-profile
 experiments.
+
+For CI rollouts where some canary traces intentionally exercise suspicious
+behavior, `--write-baseline` records stable anomaly fingerprints that exclude
+runtime-only fields such as event ids, timestamps, scores, and actions.
+Subsequent `--baseline` runs annotate events as `new` or `unchanged`,
+`--only-new` renders only regressions, and `--fail-on-new` fails the gate
+only for findings absent from the baseline.
 
 ## Project Structure
 

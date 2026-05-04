@@ -76,7 +76,14 @@ async def handle_request(user_message: str) -> str:
 ```bash
 spectra train traces.json --agent-type customer-support --output profile.json
 spectra inspect profile.json
+spectra analyze profile.json canary-traces.json --write-baseline baseline.json
+spectra analyze profile.json canary-traces.json --baseline baseline.json --fail-on-new
 spectra dashboard profile.json --port 8400
 ```
+
+`spectra analyze` fingerprints detected anomalies for repeatable CI gating.
+Use `--write-baseline` after reviewing accepted findings, then add
+`--baseline` and `--fail-on-new` to fail only when future canary runs produce
+previously unseen anomaly events.
 
 The dashboard command requires `uvicorn` and `fastapi` via the `dashboard` extra.

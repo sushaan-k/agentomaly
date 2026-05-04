@@ -376,6 +376,162 @@ class TestAnalyzeCommand:
             assert result.exit_code == 0
             assert "Anomaly events:" in result.output
 
+    def test_analyze_writes_baseline_with_stable_fingerprints(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            profile_path = _write_profile(runner, tmpdir)
+            trace_path = Path(tmpdir) / "trace.json"
+            baseline_path = Path(tmpdir) / "baselines" / "events.json"
+            trace_path.write_text(json.dumps(_make_anomalous_trace_json()))
+
+            result = runner.invoke(
+                main,
+                [
+                    "analyze",
+                    str(profile_path),
+                    str(trace_path),
+                    "--format",
+                    "json",
+                    "--write-baseline",
+                    str(baseline_path),
+                ],
+            )
+
+            assert result.exit_code == 0
+            report = json.loads(result.output)
+            assert report["event_fingerprints"]
+            assert report["traces"][0]["events"][0]["fingerprint"]
+            baseline = json.loads(baseline_path.read_text())
+            assert baseline["schema_version"] == 1
+            assert baseline["event_fingerprints"] == report["event_fingerprints"]
+            assert baseline["events"][0]["fingerprint"]
+
+    def test_analyze_only_new_filters_known_baseline_events(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            profile_path = _write_profile(runner, tmpdir)
+            trace_path = Path(tmpdir) / "trace.json"
+            baseline_path = Path(tmpdir) / "baseline.json"
+            trace_path.write_text(json.dumps(_make_anomalous_trace_json()))
+
+            first = runner.invoke(
+                main,
+                [
+                    "analyze",
+                    str(profile_path),
+                    str(trace_path),
+                    "--write-baseline",
+                    str(baseline_path),
+                ],
+            )
+            assert first.exit_code == 0
+
+            result = runner.invoke(
+                main,
+                [
+                    "analyze",
+                    str(profile_path),
+                    str(trace_path),
+                    "--baseline",
+                    str(baseline_path),
+                    "--only-new",
+                ],
+            )
+
+            assert result.exit_code == 0
+            assert "Anomaly events: 0" in result.output
+            assert "Max severity: none" in result.output
+            assert "Baseline: new=0" in result.output
+            assert "No anomalies detected." in result.output
+
+    def test_analyze_fail_on_new_ignores_unchanged_baseline_events(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            profile_path = _write_profile(runner, tmpdir)
+            trace_path = Path(tmpdir) / "trace.json"
+            baseline_path = Path(tmpdir) / "baseline.json"
+            trace_path.write_text(json.dumps(_make_anomalous_trace_json()))
+
+            first = runner.invoke(
+                main,
+                [
+                    "analyze",
+                    str(profile_path),
+                    str(trace_path),
+                    "--write-baseline",
+                    str(baseline_path),
+                ],
+            )
+            assert first.exit_code == 0
+
+            result = runner.invoke(
+                main,
+                [
+                    "analyze",
+                    str(profile_path),
+                    str(trace_path),
+                    "--baseline",
+                    str(baseline_path),
+                    "--fail-on",
+                    "LOW",
+                    "--fail-on-new",
+                ],
+            )
+
+            assert result.exit_code == 0
+            assert "Baseline: new=0" in result.output
+            assert "CI gate: passed for new events at LOW" in result.output
+
+    def test_analyze_fail_on_new_fails_for_new_baseline_events(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            profile_path = _write_profile(runner, tmpdir)
+            trace_path = Path(tmpdir) / "trace.json"
+            baseline_path = Path(tmpdir) / "empty-baseline.json"
+            trace_path.write_text(json.dumps(_make_anomalous_trace_json()))
+            baseline_path.write_text(json.dumps({"event_fingerprints": []}))
+
+            result = runner.invoke(
+                main,
+                [
+                    "analyze",
+                    str(profile_path),
+                    str(trace_path),
+                    "--baseline",
+                    str(baseline_path),
+                    "--fail-on-new",
+                ],
+            )
+
+            assert result.exit_code == 2
+            assert "Baseline: new=" in result.output
+            assert "New-event failure threshold met" in result.output
+
+    def test_analyze_fail_on_new_requires_baseline(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            profile_path = _write_profile(runner, tmpdir)
+            trace_path = Path(tmpdir) / "trace.json"
+            trace_path.write_text(json.dumps(_make_anomalous_trace_json()))
+
+            result = runner.invoke(
+                main,
+                [
+                    "analyze",
+                    str(profile_path),
+                    str(trace_path),
+                    "--fail-on-new",
+                ],
+            )
+
+            assert result.exit_code != 0
+            assert "--fail-on-new requires --baseline" in result.output
+
 
 class TestDashboardCommand:
     def test_dashboard_nonexistent_profile(self) -> None:

@@ -14,6 +14,15 @@ from typing import Any
 
 import click
 
+from spectra.baseline import (
+    annotate_report,
+    compare_report_to_baseline,
+    iter_report_events,
+    load_baseline_fingerprints,
+)
+from spectra.baseline import (
+    write_baseline as write_analysis_baseline,
+)
 from spectra.models import AgentTrace, AnomalyEvent, Severity
 from spectra.monitor import Monitor
 from spectra.profiler.profile import BehavioralProfile
@@ -125,6 +134,29 @@ def train(traces_path: str, agent_type: str, output: str, min_traces: int) -> No
     help="Exit with code 2 when any event is at or above this severity.",
 )
 @click.option(
+    "--baseline",
+    type=click.Path(exists=True, dir_okay=False),
+    help="Compare events against a prior JSON baseline or analysis report.",
+)
+@click.option(
+    "--write-baseline",
+    type=click.Path(dir_okay=False),
+    help="Write a compact JSON baseline for future analyze runs.",
+)
+@click.option(
+    "--only-new",
+    is_flag=True,
+    help="When using --baseline, include only new events in the rendered report.",
+)
+@click.option(
+    "--fail-on-new",
+    is_flag=True,
+    help=(
+        "When using --baseline, fail only for new events; "
+        "without --fail-on, any new event fails."
+    ),
+)
+@click.option(
     "--allow-agent-type-mismatch",
     is_flag=True,
     help="Analyze traces even when their agent_type differs from the profile.",
@@ -136,6 +168,10 @@ def analyze(
     output_format: str,
     output: str | None,
     fail_on: str | None,
+    baseline: str | None,
+    write_baseline: str | None,
+    only_new: bool,
+    fail_on_new: bool,
     allow_agent_type_mismatch: bool,
 ) -> None:
     """Analyze trace JSON against a trained behavioral profile.
@@ -149,23 +185,49 @@ def analyze(
     _validate_agent_types(profile, traces, allow_agent_type_mismatch)
 
     events_by_trace = _analyze_traces(profile, traces, sensitivity)
+    if only_new and baseline is None:
+        raise click.ClickException("--only-new requires --baseline.")
+    if fail_on_new and baseline is None:
+        raise click.ClickException("--fail-on-new requires --baseline.")
+
     report = _build_analysis_report(
         profile=profile,
         traces=traces,
         events_by_trace=events_by_trace,
         sensitivity=sensitivity,
-        fail_on=fail_on,
     )
+    annotate_report(report)
+    if baseline is not None:
+        try:
+            baseline_fingerprints = load_baseline_fingerprints(baseline)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        comparison = compare_report_to_baseline(report, baseline_fingerprints)
+        comparison["path"] = baseline
+        if only_new:
+            _filter_report_to_new_events(report)
+
+    _evaluate_report_gate(report, fail_on, fail_on_new)
     rendered = _render_analysis_report(report, output_format)
     _emit_report(rendered, output)
+
+    if write_baseline is not None:
+        write_analysis_baseline(report, write_baseline)
 
     if report["failed"]:
         threshold = report["fail_on"]
         max_severity = report["max_severity"]
-        click.echo(
-            f"Failure threshold met: max severity {max_severity} >= {threshold}",
-            err=True,
-        )
+        if report["fail_on_new"]:
+            click.echo(
+                f"New-event failure threshold met: "
+                f"max severity {max_severity} >= {threshold}",
+                err=True,
+            )
+        else:
+            click.echo(
+                f"Failure threshold met: max severity {max_severity} >= {threshold}",
+                err=True,
+            )
         sys.exit(2)
 
 
@@ -308,7 +370,6 @@ def _build_analysis_report(
     traces: list[AgentTrace],
     events_by_trace: list[list[AnomalyEvent]],
     sensitivity: str,
-    fail_on: str | None,
 ) -> dict[str, Any]:
     """Build the serializable report used by all CLI output formats."""
     all_events = [event for events in events_by_trace for event in events]
@@ -317,12 +378,6 @@ def _build_analysis_report(
         severity_counts[event.severity.value] += 1
 
     max_severity = _max_severity(all_events)
-    fail_threshold = Severity(fail_on.upper()) if fail_on else None
-    failed = (
-        fail_threshold is not None
-        and max_severity is not None
-        and _SEVERITY_ORDER[max_severity] >= _SEVERITY_ORDER[fail_threshold]
-    )
 
     trace_reports: list[dict[str, Any]] = []
     for trace, events in zip(traces, events_by_trace):
@@ -345,8 +400,10 @@ def _build_analysis_report(
         "event_count": len(all_events),
         "severity_counts": severity_counts,
         "max_severity": max_severity.value if max_severity else None,
-        "fail_on": fail_threshold.value if fail_threshold else None,
-        "failed": failed,
+        "fail_on": None,
+        "fail_on_new": False,
+        "failed": False,
+        "baseline_comparison": None,
         "traces": trace_reports,
     }
 
@@ -364,6 +421,80 @@ def _count_events_by_severity(events: list[AnomalyEvent]) -> dict[str, int]:
     counts = {severity.value: 0 for severity in Severity}
     for event in events:
         counts[event.severity.value] += 1
+    return counts
+
+
+def _evaluate_report_gate(
+    report: dict[str, Any],
+    fail_on: str | None,
+    fail_on_new: bool,
+) -> None:
+    """Update report gate fields after baseline filtering has been applied."""
+    threshold = Severity(fail_on.upper()) if fail_on else None
+    gate_events = list(iter_report_events(report))
+    if fail_on_new:
+        threshold = threshold or Severity.LOW
+        gate_events = [
+            event for event in gate_events if event.get("baseline_status") == "new"
+        ]
+
+    max_severity = _max_severity_from_dicts(gate_events)
+    failed = (
+        threshold is not None
+        and max_severity is not None
+        and _SEVERITY_ORDER[max_severity] >= _SEVERITY_ORDER[threshold]
+    )
+
+    report["max_severity"] = max_severity.value if max_severity else None
+    report["fail_on"] = threshold.value if threshold else None
+    report["fail_on_new"] = fail_on_new
+    report["failed"] = failed
+
+
+def _filter_report_to_new_events(report: dict[str, Any]) -> None:
+    """Remove unchanged events from per-trace output while keeping comparison data."""
+    for trace_report in report["traces"]:
+        trace_report["events"] = [
+            event
+            for event in trace_report["events"]
+            if event.get("baseline_status") == "new"
+        ]
+        trace_report["event_count"] = len(trace_report["events"])
+        trace_report["severity_counts"] = _count_event_dicts_by_severity(
+            trace_report["events"]
+        )
+
+    _refresh_report_counts(report)
+
+
+def _refresh_report_counts(report: dict[str, Any]) -> None:
+    events = list(iter_report_events(report))
+    report["event_count"] = len(events)
+    report["severity_counts"] = _count_event_dicts_by_severity(events)
+    report["max_severity"] = (
+        max_severity.value
+        if (max_severity := _max_severity_from_dicts(events)) is not None
+        else None
+    )
+
+
+def _max_severity_from_dicts(events: list[dict[str, Any]]) -> Severity | None:
+    severities: list[Severity] = []
+    for event in events:
+        raw_severity = event.get("severity")
+        if isinstance(raw_severity, str):
+            severities.append(Severity(raw_severity))
+    if not severities:
+        return None
+    return max(severities, key=lambda severity: _SEVERITY_ORDER[severity])
+
+
+def _count_event_dicts_by_severity(events: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {severity.value: 0 for severity in Severity}
+    for event in events:
+        raw_severity = event.get("severity")
+        if isinstance(raw_severity, str):
+            counts[Severity(raw_severity).value] += 1
     return counts
 
 
@@ -401,6 +532,15 @@ def _render_summary_report(report: dict[str, Any]) -> str:
     else:
         lines.append("Max severity: none")
 
+    comparison = report.get("baseline_comparison")
+    if isinstance(comparison, dict):
+        lines.append(
+            "Baseline: "
+            f"new={comparison['new_event_count']}, "
+            f"unchanged={comparison['unchanged_event_count']}, "
+            f"resolved={comparison['resolved_event_count']}"
+        )
+
     for trace_report in report["traces"]:
         lines.append("")
         lines.append(
@@ -411,18 +551,26 @@ def _render_summary_report(report: dict[str, Any]) -> str:
             continue
         for event in trace_report["events"]:
             action = event.get("action_taken") or "none"
+            status = event.get("baseline_status")
+            status_suffix = f", baseline={status}" if status else ""
             lines.append(
                 "  "
                 f"[{event['severity']}] {event['title']} "
-                f"(score={event['score']:.2f}, action={action})"
+                f"(score={event['score']:.2f}, action={action}{status_suffix})"
             )
 
     if report["failed"]:
         lines.append("")
-        lines.append(f"CI gate: failed at --fail-on {report['fail_on']}")
+        if report["fail_on_new"]:
+            lines.append(f"CI gate: failed for new events at {report['fail_on']}")
+        else:
+            lines.append(f"CI gate: failed at --fail-on {report['fail_on']}")
     elif report["fail_on"]:
         lines.append("")
-        lines.append(f"CI gate: passed for --fail-on {report['fail_on']}")
+        if report["fail_on_new"]:
+            lines.append(f"CI gate: passed for new events at {report['fail_on']}")
+        else:
+            lines.append(f"CI gate: passed for --fail-on {report['fail_on']}")
 
     return "\n".join(lines) + "\n"
 
