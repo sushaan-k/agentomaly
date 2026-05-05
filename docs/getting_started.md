@@ -78,6 +78,7 @@ spectra train traces.json --agent-type customer-support --output profile.json
 spectra inspect profile.json
 spectra analyze profile.json canary-traces.json --write-baseline baseline.json
 spectra analyze profile.json canary-traces.json --baseline baseline.json --fail-on-new
+spectra compare profile.json candidate-profile.json --fail-on moderate
 spectra dashboard profile.json --port 8400
 ```
 
@@ -85,5 +86,9 @@ spectra dashboard profile.json --port 8400
 Use `--write-baseline` after reviewing accepted findings, then add
 `--baseline` and `--fail-on-new` to fail only when future canary runs produce
 previously unseen anomaly events.
+
+`spectra compare` checks whether a newly trained profile has drifted too far
+from the accepted profile before rollout. Use `--format json` for automation or
+`--format markdown --output drift-review.md` for human review.
 
 The dashboard command requires `uvicorn` and `fastapi` via the `dashboard` extra.

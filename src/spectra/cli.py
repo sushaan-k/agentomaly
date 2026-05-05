@@ -23,6 +23,8 @@ from spectra.baseline import (
 from spectra.baseline import (
     write_baseline as write_analysis_baseline,
 )
+from spectra.drift import DriftComparison
+from spectra.drift import compare as compare_profile_drift
 from spectra.models import AgentTrace, AnomalyEvent, Severity
 from spectra.monitor import Monitor
 from spectra.profiler.profile import BehavioralProfile
@@ -32,6 +34,13 @@ _SEVERITY_ORDER: dict[Severity, int] = {
     Severity.MEDIUM: 2,
     Severity.HIGH: 3,
     Severity.CRITICAL: 4,
+}
+_DRIFT_SEVERITY_ORDER: dict[str, int] = {
+    "none": 0,
+    "low": 1,
+    "moderate": 2,
+    "high": 3,
+    "critical": 4,
 }
 
 
@@ -262,6 +271,79 @@ def inspect(profile_path: str) -> None:
     click.echo(
         f"  Duration: {vs.duration_ms_mean:.0f}ms +/- {vs.duration_ms_std:.0f}ms"
     )
+
+
+@main.command(name="compare")
+@click.argument("baseline_profile_path", type=click.Path(exists=True))
+@click.argument("comparison_profile_path", type=click.Path(exists=True))
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["summary", "json", "markdown"]),
+    default="summary",
+    show_default=True,
+    help="Comparison report format.",
+)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(dir_okay=False),
+    help="Write the report to a file instead of stdout.",
+)
+@click.option(
+    "--fail-on",
+    type=click.Choice(["low", "moderate", "high", "critical"], case_sensitive=False),
+    help="Exit with code 2 when drift severity is at or above this level.",
+)
+@click.option(
+    "--allow-agent-type-mismatch",
+    is_flag=True,
+    help="Compare profiles even when their agent_type values differ.",
+)
+def compare_profiles_command(
+    baseline_profile_path: str,
+    comparison_profile_path: str,
+    output_format: str,
+    output: str | None,
+    fail_on: str | None,
+    allow_agent_type_mismatch: bool,
+) -> None:
+    """Compare two trained profiles and report behavioral drift.
+
+    BASELINE_PROFILE_PATH is the older accepted profile. COMPARISON_PROFILE_PATH
+    is the newer candidate profile. Use --fail-on to turn drift into a CI gate
+    before replacing a production baseline.
+    """
+    baseline_profile = BehavioralProfile.load(baseline_profile_path)
+    comparison_profile = BehavioralProfile.load(comparison_profile_path)
+    if (
+        baseline_profile.agent_type != comparison_profile.agent_type
+        and not allow_agent_type_mismatch
+    ):
+        raise click.ClickException(
+            "Profile agent_type values differ: "
+            f"'{baseline_profile.agent_type}' vs "
+            f"'{comparison_profile.agent_type}'. "
+            "Use --allow-agent-type-mismatch to override."
+        )
+
+    drift = compare_profile_drift(baseline_profile, comparison_profile)
+    report = _build_profile_comparison_report(
+        baseline_profile=baseline_profile,
+        comparison_profile=comparison_profile,
+        drift=drift,
+        fail_on=fail_on,
+    )
+    rendered = _render_profile_comparison_report(report, output_format)
+    _emit_report(rendered, output)
+
+    if report["failed"]:
+        click.echo(
+            "Drift threshold met: "
+            f"severity {report['severity']} >= {report['fail_on']}",
+            err=True,
+        )
+        sys.exit(2)
 
 
 @main.command()
@@ -583,6 +665,138 @@ def _emit_report(rendered: str, output: str | None) -> None:
     path = Path(output)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(rendered)
+
+
+def _build_profile_comparison_report(
+    baseline_profile: BehavioralProfile,
+    comparison_profile: BehavioralProfile,
+    drift: DriftComparison,
+    fail_on: str | None,
+) -> dict[str, Any]:
+    threshold = fail_on.lower() if fail_on else None
+    severity = str(drift["severity"])
+    failed = (
+        threshold is not None
+        and _DRIFT_SEVERITY_ORDER[severity] >= _DRIFT_SEVERITY_ORDER[threshold]
+    )
+    return {
+        "baseline_agent_type": baseline_profile.agent_type,
+        "comparison_agent_type": comparison_profile.agent_type,
+        "baseline_trace_count": baseline_profile.trace_count,
+        "comparison_trace_count": comparison_profile.trace_count,
+        "baseline_created_at": baseline_profile.created_at.isoformat(),
+        "comparison_created_at": comparison_profile.created_at.isoformat(),
+        "new_tools": drift["new_tools"],
+        "removed_tools": drift["removed_tools"],
+        "frequency_drift": drift["frequency_drift"],
+        "markov_divergence": drift["markov_divergence"],
+        "drift_score": drift["drift_score"],
+        "severity": severity,
+        "recommended_action": drift["recommended_action"],
+        "fail_on": threshold,
+        "failed": failed,
+    }
+
+
+def _render_profile_comparison_report(
+    report: dict[str, Any],
+    output_format: str,
+) -> str:
+    if output_format == "json":
+        return json.dumps(report, indent=2) + "\n"
+    if output_format == "markdown":
+        return _render_profile_comparison_markdown(report)
+    return _render_profile_comparison_summary(report)
+
+
+def _render_profile_comparison_summary(report: dict[str, Any]) -> str:
+    lines = [
+        "Profile drift comparison",
+        f"Baseline: {report['baseline_agent_type']} ({report['baseline_trace_count']} traces)",
+        f"Comparison: {report['comparison_agent_type']} ({report['comparison_trace_count']} traces)",
+        f"Drift score: {report['drift_score']:.4f}",
+        f"Severity: {report['severity']}",
+        f"Recommended action: {report['recommended_action']}",
+        f"Markov divergence: {report['markov_divergence']:.6f}",
+        f"New tools: {_format_item_list(report['new_tools'])}",
+        f"Removed tools: {_format_item_list(report['removed_tools'])}",
+    ]
+    frequency_drift = _sorted_frequency_drift(report["frequency_drift"])
+    if frequency_drift:
+        lines.append("Frequency drift:")
+        for tool_name, delta in frequency_drift:
+            lines.append(f"  {tool_name}: {delta:.4f}")
+    else:
+        lines.append("Frequency drift: none")
+
+    if report["failed"]:
+        lines.append("")
+        lines.append(f"CI gate: failed at --fail-on {report['fail_on']}")
+    elif report["fail_on"]:
+        lines.append("")
+        lines.append(f"CI gate: passed for --fail-on {report['fail_on']}")
+
+    return "\n".join(lines) + "\n"
+
+
+def _render_profile_comparison_markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "# Profile Drift Comparison",
+        "",
+        "| Field | Value |",
+        "|---|---|",
+        f"| Baseline | {report['baseline_agent_type']} ({report['baseline_trace_count']} traces) |",
+        f"| Comparison | {report['comparison_agent_type']} ({report['comparison_trace_count']} traces) |",
+        f"| Drift score | {report['drift_score']:.4f} |",
+        f"| Severity | {report['severity']} |",
+        f"| Recommended action | {report['recommended_action']} |",
+        f"| Markov divergence | {report['markov_divergence']:.6f} |",
+        "",
+        "## Tool Set Changes",
+        "",
+        f"- New tools: {_format_item_list(report['new_tools'])}",
+        f"- Removed tools: {_format_item_list(report['removed_tools'])}",
+        "",
+        "## Frequency Drift",
+        "",
+    ]
+    frequency_drift = _sorted_frequency_drift(report["frequency_drift"])
+    if frequency_drift:
+        lines.extend(["| Tool | Absolute delta |", "|---|---:|"])
+        lines.extend(
+            f"| {tool_name} | {delta:.4f} |" for tool_name, delta in frequency_drift
+        )
+    else:
+        lines.append("No per-tool frequency drift detected.")
+
+    if report["fail_on"]:
+        lines.extend(
+            [
+                "",
+                "## CI Gate",
+                "",
+                (
+                    f"Failed at `--fail-on {report['fail_on']}`."
+                    if report["failed"]
+                    else f"Passed for `--fail-on {report['fail_on']}`."
+                ),
+            ]
+        )
+
+    return "\n".join(lines) + "\n"
+
+
+def _format_item_list(items: list[str]) -> str:
+    return ", ".join(items) if items else "none"
+
+
+def _sorted_frequency_drift(
+    frequency_drift: dict[str, float],
+) -> list[tuple[str, float]]:
+    return sorted(
+        frequency_drift.items(),
+        key=lambda item: (-item[1], item[0]),
+    )
 
 
 if __name__ == "__main__":

@@ -12,7 +12,8 @@ from unittest.mock import patch
 from click.testing import CliRunner
 
 from spectra.cli import main
-from spectra.models import AgentTrace, LLMCall, ToolCall
+from spectra.models import AgentTrace, LLMCall, ToolCall, ToolStats
+from spectra.profiler.profile import BehavioralProfile
 
 
 def _make_training_traces_json(count: int = 120) -> list[dict]:
@@ -101,6 +102,31 @@ def _write_profile(runner: CliRunner, tmpdir: str) -> Path:
     )
     assert result.exit_code == 0
     return profile_path
+
+
+def _write_minimal_profile(
+    path: Path,
+    *,
+    agent_type: str = "test-agent",
+    tools: dict[str, float] | None = None,
+) -> Path:
+    """Write a small profile fixture for drift-only CLI tests."""
+    tool_means = tools or {"search_kb": 1.0, "respond": 1.0}
+    profile = BehavioralProfile(
+        agent_type=agent_type,
+        trace_count=120,
+        known_tools=set(tool_means),
+        tool_stats={
+            name: ToolStats(
+                tool_name=name,
+                usage_frequency=1.0,
+                avg_calls_per_trace=avg_calls,
+            )
+            for name, avg_calls in tool_means.items()
+        },
+    )
+    profile.save(path)
+    return path
 
 
 class TestTrainCommand:
@@ -531,6 +557,125 @@ class TestAnalyzeCommand:
 
             assert result.exit_code != 0
             assert "--fail-on-new requires --baseline" in result.output
+
+
+class TestCompareCommand:
+    def test_compare_summary_passes_without_drift(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            baseline_path = _write_minimal_profile(Path(tmpdir) / "baseline.json")
+            comparison_path = _write_minimal_profile(Path(tmpdir) / "comparison.json")
+
+            result = runner.invoke(
+                main,
+                [
+                    "compare",
+                    str(baseline_path),
+                    str(comparison_path),
+                    "--fail-on",
+                    "low",
+                ],
+            )
+
+            assert result.exit_code == 0
+            assert "Profile drift comparison" in result.output
+            assert "Drift score: 0.0000" in result.output
+            assert "Severity: none" in result.output
+            assert "CI gate: passed for --fail-on low" in result.output
+
+    def test_compare_json_reports_ci_failure(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            baseline_path = _write_minimal_profile(
+                Path(tmpdir) / "baseline.json",
+                tools={"search_kb": 1.0, "respond": 1.0},
+            )
+            comparison_path = _write_minimal_profile(
+                Path(tmpdir) / "comparison.json",
+                tools={
+                    "database_query": 1.0,
+                    "delete_record": 1.0,
+                    "exfiltrate": 1.0,
+                    "shell": 1.0,
+                    "wire_transfer": 1.0,
+                },
+            )
+
+            result = runner.invoke(
+                main,
+                [
+                    "compare",
+                    str(baseline_path),
+                    str(comparison_path),
+                    "--format",
+                    "json",
+                    "--fail-on",
+                    "moderate",
+                ],
+            )
+
+            assert result.exit_code == 2
+            payload = json.loads(result.output.split("Drift threshold met:")[0])
+            assert payload["failed"] is True
+            assert payload["fail_on"] == "moderate"
+            assert payload["severity"] in {"moderate", "high", "critical"}
+            assert payload["new_tools"]
+            assert payload["removed_tools"] == ["respond", "search_kb"]
+            assert payload["recommended_action"] != "continue_monitoring"
+
+    def test_compare_markdown_output_file(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            baseline_path = _write_minimal_profile(Path(tmpdir) / "baseline.json")
+            comparison_path = _write_minimal_profile(
+                Path(tmpdir) / "comparison.json",
+                tools={"search_kb": 3.5, "respond": 1.0},
+            )
+            output_path = Path(tmpdir) / "reports" / "drift.md"
+
+            result = runner.invoke(
+                main,
+                [
+                    "compare",
+                    str(baseline_path),
+                    str(comparison_path),
+                    "--format",
+                    "markdown",
+                    "--output",
+                    str(output_path),
+                ],
+            )
+
+            assert result.exit_code == 0
+            assert result.output == ""
+            report = output_path.read_text()
+            assert "# Profile Drift Comparison" in report
+            assert "| Drift score |" in report
+            assert "| search_kb | 2.5000 |" in report
+
+    def test_compare_rejects_agent_type_mismatch_by_default(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            baseline_path = _write_minimal_profile(
+                Path(tmpdir) / "baseline.json",
+                agent_type="support-agent",
+            )
+            comparison_path = _write_minimal_profile(
+                Path(tmpdir) / "comparison.json",
+                agent_type="research-agent",
+            )
+
+            result = runner.invoke(
+                main,
+                ["compare", str(baseline_path), str(comparison_path)],
+            )
+
+            assert result.exit_code != 0
+            assert "Profile agent_type values differ" in result.output
 
 
 class TestDashboardCommand:

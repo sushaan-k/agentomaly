@@ -271,6 +271,12 @@ spectra analyze profile.json traces.json \
   --only-new \
   --fail-on-new
 
+# Compare an accepted profile with a candidate retrain before rollout
+spectra compare production-profile.json candidate-profile.json --fail-on moderate
+spectra compare production-profile.json candidate-profile.json \
+  --format markdown \
+  --output drift-review.md
+
 # Launch the dashboard
 spectra dashboard profile.json --port 8400
 ```
@@ -287,6 +293,13 @@ runtime-only fields such as event ids, timestamps, scores, and actions.
 Subsequent `--baseline` runs annotate events as `new` or `unchanged`,
 `--only-new` renders only regressions, and `--fail-on-new` fails the gate
 only for findings absent from the baseline.
+
+`spectra compare` turns profile drift into a rollout gate. It reports new and
+removed tools, per-tool frequency drift, Markov transition divergence, a
+composite severity (`none`, `low`, `moderate`, `high`, or `critical`), and a
+recommended operational action. By default it rejects mismatched `agent_type`
+values so teams do not accidentally compare unrelated agents; use
+`--allow-agent-type-mismatch` only for intentional cross-agent experiments.
 
 ## Project Structure
 
