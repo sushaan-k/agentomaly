@@ -79,6 +79,7 @@ spectra inspect profile.json
 spectra analyze profile.json canary-traces.json --write-baseline baseline.json
 spectra analyze profile.json canary-traces.json --baseline baseline.json --fail-on-new
 spectra compare profile.json candidate-profile.json --fail-on moderate
+spectra trend report.json events.jsonl --fail-on-escalating
 spectra dashboard profile.json --port 8400
 ```
 
@@ -90,5 +91,9 @@ previously unseen anomaly events.
 `spectra compare` checks whether a newly trained profile has drifted too far
 from the accepted profile before rollout. Use `--format json` for automation or
 `--format markdown --output drift-review.md` for human review.
+
+`spectra trend` checks whether anomaly severity is escalating across saved
+analysis output. It accepts JSON reports, JSONL event streams, single event
+objects, and event arrays, then evaluates a rolling severity window.
 
 The dashboard command requires `uvicorn` and `fastapi` via the `dashboard` extra.

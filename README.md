@@ -277,6 +277,10 @@ spectra compare production-profile.json candidate-profile.json \
   --format markdown \
   --output drift-review.md
 
+# Detect whether accepted anomalies are getting worse over time
+spectra trend report.json events.jsonl --window-size 20 --fail-on-escalating
+spectra trend events.jsonl --format markdown --output anomaly-trend.md
+
 # Launch the dashboard
 spectra dashboard profile.json --port 8400
 ```
@@ -300,6 +304,13 @@ composite severity (`none`, `low`, `moderate`, `high`, or `critical`), and a
 recommended operational action. By default it rejects mismatched `agent_type`
 values so teams do not accidentally compare unrelated agents; use
 `--allow-agent-type-mismatch` only for intentional cross-agent experiments.
+
+`spectra trend` reads one or more anomaly event sources, including JSON reports
+from `spectra analyze --format json`, JSONL streams from
+`spectra analyze --format jsonl`, single event objects, or event arrays. It
+sorts events chronologically, evaluates the most recent rolling window, and can
+fail CI with `--fail-on-escalating` when anomaly severity is getting worse
+instead of merely present.
 
 ## Project Structure
 

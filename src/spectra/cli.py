@@ -28,6 +28,7 @@ from spectra.drift import compare as compare_profile_drift
 from spectra.models import AgentTrace, AnomalyEvent, Severity
 from spectra.monitor import Monitor
 from spectra.profiler.profile import BehavioralProfile
+from spectra.trend import Trend, TrendTracker
 
 _SEVERITY_ORDER: dict[Severity, int] = {
     Severity.LOW: 1,
@@ -342,6 +343,82 @@ def compare_profiles_command(
             "Drift threshold met: "
             f"severity {report['severity']} >= {report['fail_on']}",
             err=True,
+        )
+        sys.exit(2)
+
+
+@main.command(name="trend")
+@click.argument(
+    "events_paths",
+    nargs=-1,
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+)
+@click.option(
+    "--window-size",
+    default=20,
+    show_default=True,
+    type=int,
+    help="Number of most recent events to use for rolling trend classification.",
+)
+@click.option(
+    "--escalation-threshold",
+    default=0.5,
+    show_default=True,
+    type=float,
+    help="Mean severity delta required to classify escalation or de-escalation.",
+)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["summary", "json", "markdown"]),
+    default="summary",
+    show_default=True,
+    help="Trend report format.",
+)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(dir_okay=False),
+    help="Write the report to a file instead of stdout.",
+)
+@click.option(
+    "--fail-on-escalating",
+    is_flag=True,
+    help="Exit with code 2 when the rolling window is escalating.",
+)
+def trend_command(
+    events_paths: tuple[str, ...],
+    window_size: int,
+    escalation_threshold: float,
+    output_format: str,
+    output: str | None,
+    fail_on_escalating: bool,
+) -> None:
+    """Report rolling severity trends from saved anomaly event reports.
+
+    EVENTS_PATHS may be one or more ``spectra analyze --format json`` reports,
+    JSON arrays of anomaly events, single anomaly event objects, or JSONL files
+    produced by ``spectra analyze --format jsonl``.
+    """
+    events = _load_anomaly_events(events_paths)
+    try:
+        report = _build_trend_report(
+            events=events,
+            source_count=len(events_paths),
+            window_size=window_size,
+            escalation_threshold=escalation_threshold,
+            fail_on_escalating=fail_on_escalating,
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    rendered = _render_trend_report(report, output_format)
+    _emit_report(rendered, output)
+
+    if report["failed"]:
+        click.echo(
+            "Trend gate failed: rolling anomaly severity is escalating", err=True
         )
         sys.exit(2)
 
@@ -784,6 +861,224 @@ def _render_profile_comparison_markdown(report: dict[str, Any]) -> str:
         )
 
     return "\n".join(lines) + "\n"
+
+
+def _load_anomaly_events(events_paths: tuple[str, ...]) -> list[AnomalyEvent]:
+    events: list[AnomalyEvent] = []
+    for events_path in events_paths:
+        events.extend(_load_anomaly_events_from_path(Path(events_path)))
+    return sorted(events, key=lambda event: event.timestamp.timestamp())
+
+
+def _load_anomaly_events_from_path(path: Path) -> list[AnomalyEvent]:
+    try:
+        raw_text = path.read_text()
+    except OSError as exc:
+        raise click.ClickException(f"Error loading events from {path}: {exc}") from exc
+
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError:
+        return _load_jsonl_anomaly_events(raw_text, path)
+    return _coerce_anomaly_event_payload(payload, str(path))
+
+
+def _load_jsonl_anomaly_events(raw_text: str, path: Path) -> list[AnomalyEvent]:
+    events: list[AnomalyEvent] = []
+    for line_number, line in enumerate(raw_text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            raise click.ClickException(
+                f"Line {line_number} in {path} is not valid JSON: {exc}"
+            ) from exc
+        events.extend(
+            _coerce_anomaly_event_payload(payload, f"{path}: line {line_number}")
+        )
+    return events
+
+
+def _coerce_anomaly_event_payload(payload: Any, source: str) -> list[AnomalyEvent]:
+    if isinstance(payload, dict):
+        traces = payload.get("traces")
+        if isinstance(traces, list):
+            events: list[AnomalyEvent] = []
+            for trace_index, trace_report in enumerate(traces):
+                if not isinstance(trace_report, dict):
+                    raise click.ClickException(
+                        f"{source}: traces[{trace_index}] must be an object."
+                    )
+                trace_events = trace_report.get("events", [])
+                if not isinstance(trace_events, list):
+                    raise click.ClickException(
+                        f"{source}: traces[{trace_index}].events must be an array."
+                    )
+                for event_index, event_payload in enumerate(trace_events):
+                    events.append(
+                        _validate_anomaly_event(
+                            event_payload,
+                            f"{source}: traces[{trace_index}].events[{event_index}]",
+                        )
+                    )
+            return events
+        return [_validate_anomaly_event(payload, source)]
+
+    if isinstance(payload, list):
+        return [
+            _validate_anomaly_event(item, f"{source}: [{index}]")
+            for index, item in enumerate(payload)
+        ]
+
+    raise click.ClickException(
+        f"{source}: expected an anomaly event, event array, or analysis report."
+    )
+
+
+def _validate_anomaly_event(payload: Any, source: str) -> AnomalyEvent:
+    if not isinstance(payload, dict):
+        raise click.ClickException(f"{source}: anomaly event must be an object.")
+    try:
+        return AnomalyEvent.model_validate(payload)
+    except Exception as exc:
+        raise click.ClickException(f"{source}: invalid anomaly event: {exc}") from exc
+
+
+def _build_trend_report(
+    events: list[AnomalyEvent],
+    source_count: int,
+    window_size: int,
+    escalation_threshold: float,
+    fail_on_escalating: bool,
+) -> dict[str, Any]:
+    tracker = TrendTracker(
+        window_size=window_size,
+        escalation_threshold=escalation_threshold,
+    )
+    window_events = events[-window_size:]
+    tracker.record_many(window_events)
+    snapshot = tracker.snapshot()
+    trend = str(snapshot["trend"])
+    failed = fail_on_escalating and trend == Trend.ESCALATING.value
+
+    return {
+        "source_count": source_count,
+        "event_count": len(events),
+        "window_size": window_size,
+        "window_event_count": len(window_events),
+        "escalation_threshold": escalation_threshold,
+        "trend": trend,
+        "mean_severity": snapshot["mean_severity"],
+        "severity_counts": _count_events_by_severity(events),
+        "window_severity_counts": _count_events_by_severity(window_events),
+        "first_event_at": events[0].timestamp.isoformat() if events else None,
+        "last_event_at": events[-1].timestamp.isoformat() if events else None,
+        "recommended_action": _recommend_trend_action(trend),
+        "fail_on_escalating": fail_on_escalating,
+        "failed": failed,
+    }
+
+
+def _recommend_trend_action(trend: str) -> str:
+    actions = {
+        Trend.ESCALATING.value: "investigate_current_rollout",
+        Trend.STABLE.value: "continue_monitoring",
+        Trend.DE_ESCALATING.value: "continue_monitoring",
+        Trend.INSUFFICIENT_DATA.value: "collect_more_events",
+    }
+    return actions.get(trend, "investigate_current_rollout")
+
+
+def _render_trend_report(report: dict[str, Any], output_format: str) -> str:
+    if output_format == "json":
+        return json.dumps(report, indent=2) + "\n"
+    if output_format == "markdown":
+        return _render_trend_markdown(report)
+    return _render_trend_summary(report)
+
+
+def _render_trend_summary(report: dict[str, Any]) -> str:
+    lines = [
+        "Anomaly trend",
+        f"Sources: {report['source_count']}",
+        f"Events loaded: {report['event_count']}",
+        (
+            f"Window: {report['window_size']} "
+            f"(using {report['window_event_count']} events)"
+        ),
+        f"Trend: {report['trend']}",
+        f"Mean severity: {_format_optional_float(report['mean_severity'])}",
+        f"Recommended action: {report['recommended_action']}",
+        "Severity counts: " + _format_severity_counts(report["severity_counts"]),
+        "Window severity counts: "
+        + _format_severity_counts(report["window_severity_counts"]),
+    ]
+    if report["first_event_at"]:
+        lines.append(f"First event: {report['first_event_at']}")
+        lines.append(f"Last event: {report['last_event_at']}")
+
+    if report["failed"]:
+        lines.append("")
+        lines.append("CI gate: failed for escalating trend")
+    elif report["fail_on_escalating"]:
+        lines.append("")
+        lines.append("CI gate: passed for escalating trend")
+
+    return "\n".join(lines) + "\n"
+
+
+def _render_trend_markdown(report: dict[str, Any]) -> str:
+    lines = [
+        "# Anomaly Trend",
+        "",
+        "| Field | Value |",
+        "|---|---|",
+        f"| Sources | {report['source_count']} |",
+        f"| Events loaded | {report['event_count']} |",
+        (
+            f"| Window | {report['window_size']} "
+            f"(using {report['window_event_count']} events) |"
+        ),
+        f"| Trend | {report['trend']} |",
+        f"| Mean severity | {_format_optional_float(report['mean_severity'])} |",
+        f"| Recommended action | {report['recommended_action']} |",
+        f"| Severity counts | {_format_severity_counts(report['severity_counts'])} |",
+        (
+            f"| Window severity counts | "
+            f"{_format_severity_counts(report['window_severity_counts'])} |"
+        ),
+    ]
+    if report["first_event_at"]:
+        lines.append(f"| First event | {report['first_event_at']} |")
+        lines.append(f"| Last event | {report['last_event_at']} |")
+
+    if report["fail_on_escalating"]:
+        lines.extend(
+            [
+                "",
+                "## CI Gate",
+                "",
+                (
+                    "Failed for escalating trend."
+                    if report["failed"]
+                    else "Passed for escalating trend."
+                ),
+            ]
+        )
+
+    return "\n".join(lines) + "\n"
+
+
+def _format_optional_float(value: object) -> str:
+    return f"{value:.2f}" if isinstance(value, float) else "none"
+
+
+def _format_severity_counts(counts: dict[str, int]) -> str:
+    return ", ".join(
+        f"{severity.value}={counts[severity.value]}" for severity in Severity
+    )
 
 
 def _format_item_list(items: list[str]) -> str:

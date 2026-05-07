@@ -12,7 +12,15 @@ from unittest.mock import patch
 from click.testing import CliRunner
 
 from spectra.cli import main
-from spectra.models import AgentTrace, LLMCall, ToolCall, ToolStats
+from spectra.models import (
+    AgentTrace,
+    AnomalyEvent,
+    DetectorType,
+    LLMCall,
+    Severity,
+    ToolCall,
+    ToolStats,
+)
 from spectra.profiler.profile import BehavioralProfile
 
 
@@ -81,6 +89,21 @@ def _make_anomalous_trace_json(agent_type: str = "test-agent") -> dict:
         output="```sql\nselect * from users;\n```",
     )
     return trace.model_dump(mode="json")
+
+
+def _make_anomaly_event_json(severity: str, offset_seconds: int) -> dict:
+    """Build a serializable anomaly event for trend CLI tests."""
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=offset_seconds)
+    return AnomalyEvent(
+        timestamp=timestamp,
+        trace_id=f"trace-{offset_seconds}",
+        agent_type="test-agent",
+        detector_type=DetectorType.TOOL_USAGE,
+        severity=Severity(severity),
+        title=f"{severity} event",
+        description="Synthetic trend fixture.",
+        score=0.5,
+    ).model_dump(mode="json")
 
 
 def _write_profile(runner: CliRunner, tmpdir: str) -> Path:
@@ -676,6 +699,127 @@ class TestCompareCommand:
 
             assert result.exit_code != 0
             assert "Profile agent_type values differ" in result.output
+
+
+class TestTrendCommand:
+    def test_trend_jsonl_gate_fails_for_escalating_window(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            events_path = Path(tmpdir) / "events.jsonl"
+            events = [
+                _make_anomaly_event_json("LOW", 1),
+                _make_anomaly_event_json("LOW", 2),
+                _make_anomaly_event_json("HIGH", 3),
+                _make_anomaly_event_json("CRITICAL", 4),
+            ]
+            events_path.write_text("\n".join(json.dumps(event) for event in events))
+
+            result = runner.invoke(
+                main,
+                [
+                    "trend",
+                    str(events_path),
+                    "--window-size",
+                    "4",
+                    "--format",
+                    "json",
+                    "--fail-on-escalating",
+                ],
+            )
+
+            assert result.exit_code == 2
+            payload = json.loads(result.output.split("Trend gate failed:")[0])
+            assert payload["trend"] == "escalating"
+            assert payload["failed"] is True
+            assert payload["window_event_count"] == 4
+            assert payload["window_severity_counts"]["CRITICAL"] == 1
+
+    def test_trend_summary_reads_analysis_report_events(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_path = Path(tmpdir) / "analysis.json"
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "traces": [
+                            {
+                                "trace_id": "trace-a",
+                                "events": [
+                                    _make_anomaly_event_json("LOW", 1),
+                                    _make_anomaly_event_json("LOW", 2),
+                                ],
+                            },
+                            {
+                                "trace_id": "trace-b",
+                                "events": [
+                                    _make_anomaly_event_json("LOW", 3),
+                                    _make_anomaly_event_json("LOW", 4),
+                                ],
+                            },
+                        ]
+                    }
+                )
+            )
+
+            result = runner.invoke(
+                main,
+                [
+                    "trend",
+                    str(report_path),
+                    "--window-size",
+                    "4",
+                    "--fail-on-escalating",
+                ],
+            )
+
+            assert result.exit_code == 0
+            assert "Anomaly trend" in result.output
+            assert "Events loaded: 4" in result.output
+            assert "Trend: stable" in result.output
+            assert "CI gate: passed for escalating trend" in result.output
+
+    def test_trend_markdown_output_file(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            events_path = Path(tmpdir) / "events.json"
+            output_path = Path(tmpdir) / "reports" / "trend.md"
+            events_path.write_text(
+                json.dumps(
+                    [
+                        _make_anomaly_event_json("MEDIUM", 1),
+                        _make_anomaly_event_json("MEDIUM", 2),
+                        _make_anomaly_event_json("LOW", 3),
+                        _make_anomaly_event_json("LOW", 4),
+                    ]
+                )
+            )
+
+            result = runner.invoke(
+                main,
+                [
+                    "trend",
+                    str(events_path),
+                    "--window-size",
+                    "4",
+                    "--format",
+                    "markdown",
+                    "--output",
+                    str(output_path),
+                ],
+            )
+
+            assert result.exit_code == 0
+            assert result.output == ""
+            report = output_path.read_text()
+            assert "# Anomaly Trend" in report
+            assert "| Trend | de-escalating |" in report
+            assert (
+                "| Window severity counts | LOW=2, MEDIUM=2, HIGH=0, CRITICAL=0 |"
+                in report
+            )
 
 
 class TestDashboardCommand:
