@@ -51,7 +51,11 @@ def classify_drift(score: float) -> DriftSeverity:
 
 
 def recommend_drift_action(severity: str) -> DriftAction:
-    """Return an operational response for a drift severity bucket."""
+    """Return an operational response for a drift severity bucket.
+
+    Unknown severities default to operator review so external payloads fail
+    conservatively instead of being treated as safe.
+    """
     actions: dict[str, DriftAction] = {
         "none": "continue_monitoring",
         "low": "review_next_cycle",
