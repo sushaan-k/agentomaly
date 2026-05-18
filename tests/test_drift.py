@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 
-from spectra.drift import classify_drift, compare
+from spectra.drift import classify_drift, compare, recommend_drift_action
 from spectra.profiler.profile import BehavioralProfile
 from spectra.profiler.trainer import ProfileTrainer
 from tests.conftest import _make_trace, _make_training_traces
@@ -21,6 +21,8 @@ class TestProfileComparison:
         assert result["frequency_drift"] == {}
         assert result["markov_divergence"] == 0.0
         assert result["drift_score"] == 0.0
+        assert result["severity"] == "none"
+        assert result["recommended_action"] == "continue_monitoring"
 
     def test_detects_new_tools(self) -> None:
         """Adding a tool to the second profile should show up as new."""
@@ -144,7 +146,10 @@ class TestProfileComparison:
         empty = BehavioralProfile(agent_type="empty")
         result = compare(trained_profile, empty)
         assert 0.0 <= result["drift_score"] <= 1.0
-        assert result["severity"] in {"low", "moderate", "high", "critical", "none"}
+        assert result["severity"] in {"none", "low", "moderate", "high", "critical"}
+        assert result["recommended_action"] == recommend_drift_action(
+            result["severity"]
+        )
 
     def test_classify_drift_thresholds(self) -> None:
         assert classify_drift(0.0) == "none"
@@ -156,3 +161,11 @@ class TestProfileComparison:
         assert classify_drift(0.75) == "critical"
         assert classify_drift(0.8) == "critical"
         assert classify_drift(1.0) == "critical"
+
+    def test_recommend_drift_action(self) -> None:
+        assert recommend_drift_action("none") == "continue_monitoring"
+        assert recommend_drift_action("low") == "review_next_cycle"
+        assert recommend_drift_action("moderate") == "increase_sampling"
+        assert recommend_drift_action("high") == "require_operator_review"
+        assert recommend_drift_action("critical") == "pause_agent"
+        assert recommend_drift_action("unexpected") == "require_operator_review"

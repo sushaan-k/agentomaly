@@ -9,13 +9,35 @@ from __future__ import annotations
 
 import logging
 import math
+from typing import Literal, TypedDict
 
 from spectra.profiler.profile import BehavioralProfile
 
 logger = logging.getLogger(__name__)
 
+DriftSeverity = Literal["none", "low", "moderate", "high", "critical"]
+DriftAction = Literal[
+    "continue_monitoring",
+    "review_next_cycle",
+    "increase_sampling",
+    "require_operator_review",
+    "pause_agent",
+]
 
-def classify_drift(score: float) -> str:
+
+class DriftComparison(TypedDict):
+    """Typed drift comparison payload returned by :func:`compare`."""
+
+    new_tools: list[str]
+    removed_tools: list[str]
+    frequency_drift: dict[str, float]
+    markov_divergence: float
+    drift_score: float
+    severity: DriftSeverity
+    recommended_action: DriftAction
+
+
+def classify_drift(score: float) -> DriftSeverity:
     """Map a numeric drift score onto an operational severity bucket."""
     if score >= 0.75:
         return "critical"
@@ -28,10 +50,22 @@ def classify_drift(score: float) -> str:
     return "none"
 
 
+def recommend_drift_action(severity: str) -> DriftAction:
+    """Return an operational response for a drift severity bucket."""
+    actions: dict[str, DriftAction] = {
+        "none": "continue_monitoring",
+        "low": "review_next_cycle",
+        "moderate": "increase_sampling",
+        "high": "require_operator_review",
+        "critical": "pause_agent",
+    }
+    return actions.get(severity, "require_operator_review")
+
+
 def compare(
     profile_a: BehavioralProfile,
     profile_b: BehavioralProfile,
-) -> dict[str, object]:
+) -> DriftComparison:
     """Compute behavioral drift between two profiles.
 
     Analyzes three dimensions of change:
@@ -53,6 +87,8 @@ def compare(
         - ``frequency_drift``: per-tool absolute change in mean usage.
         - ``markov_divergence``: symmetric KL divergence (float).
         - ``drift_score``: composite 0-1 score summarising overall drift.
+        - ``severity``: severity bucket derived from ``drift_score``.
+        - ``recommended_action``: operational response for the severity bucket.
     """
     new_tools = sorted(profile_b.known_tools - profile_a.known_tools)
     removed_tools = sorted(profile_a.known_tools - profile_b.known_tools)
@@ -62,6 +98,7 @@ def compare(
     drift_score = _composite_drift_score(
         new_tools, removed_tools, frequency_drift, markov_div
     )
+    severity = classify_drift(drift_score)
 
     return {
         "new_tools": new_tools,
@@ -69,7 +106,8 @@ def compare(
         "frequency_drift": frequency_drift,
         "markov_divergence": markov_div,
         "drift_score": drift_score,
-        "severity": classify_drift(drift_score),
+        "severity": severity,
+        "recommended_action": recommend_drift_action(severity),
     }
 
 
