@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 
-from spectra.drift import compare
+from spectra.drift import classify_drift, compare
 from spectra.profiler.profile import BehavioralProfile
 from spectra.profiler.trainer import ProfileTrainer
 from tests.conftest import _make_trace, _make_training_traces
@@ -144,3 +144,15 @@ class TestProfileComparison:
         empty = BehavioralProfile(agent_type="empty")
         result = compare(trained_profile, empty)
         assert 0.0 <= result["drift_score"] <= 1.0
+        assert result["severity"] in {"low", "moderate", "high", "critical", "none"}
+
+    def test_classify_drift_thresholds(self) -> None:
+        assert classify_drift(0.0) == "none"
+        assert classify_drift(0.2) == "low"
+        assert classify_drift(0.25) == "moderate"
+        assert classify_drift(0.3) == "moderate"
+        assert classify_drift(0.5) == "high"
+        assert classify_drift(0.6) == "high"
+        assert classify_drift(0.75) == "critical"
+        assert classify_drift(0.8) == "critical"
+        assert classify_drift(1.0) == "critical"

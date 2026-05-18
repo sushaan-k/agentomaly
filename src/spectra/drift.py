@@ -15,6 +15,19 @@ from spectra.profiler.profile import BehavioralProfile
 logger = logging.getLogger(__name__)
 
 
+def classify_drift(score: float) -> str:
+    """Map a numeric drift score onto an operational severity bucket."""
+    if score >= 0.75:
+        return "critical"
+    if score >= 0.5:
+        return "high"
+    if score >= 0.25:
+        return "moderate"
+    if score > 0.0:
+        return "low"
+    return "none"
+
+
 def compare(
     profile_a: BehavioralProfile,
     profile_b: BehavioralProfile,
@@ -56,6 +69,7 @@ def compare(
         "frequency_drift": frequency_drift,
         "markov_divergence": markov_div,
         "drift_score": drift_score,
+        "severity": classify_drift(drift_score),
     }
 
 
